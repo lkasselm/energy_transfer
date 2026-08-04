@@ -1,0 +1,31 @@
+<parthenon/job>
+problem_id = energy_transfer_test
+
+<parthenon/mesh>
+refinement = none
+nghost = 2
+
+nx1 = 16
+x1min = 0.0
+x1max = 6.283185307179586
+ix1_bc = periodic
+ox1_bc = periodic
+
+nx2 = 16
+x2min = 0.0
+x2max = 6.283185307179586
+ix2_bc = periodic
+ox2_bc = periodic
+
+nx3 = 16
+x3min = 0.0
+x3max = 6.283185307179586
+ix3_bc = periodic
+ox3_bc = periodic
+
+num_packs = 1
+
+<parthenon/meshblock>
+nx1 = 16
+nx2 = 16
+nx3 = 16
