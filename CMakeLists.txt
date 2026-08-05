@@ -24,12 +24,42 @@ if(NOT TARGET Parthenon::parthenon)
   endif()
 endif()
 
+# Mesh::GetFFTManager()/GetUniformGridHelper() (which energy_transfer calls
+# unconditionally throughout) only exist at all when Parthenon was configured
+# with -DPARTHENON_ENABLE_FFT=ON -- src/CMakeLists.txt guards their sources
+# and PUBLIC-propagated compile definition behind that same option(). Check
+# it here (best-effort: PARTHENON_ENABLE_FFT may not be visible when Parthenon
+# was found via find_package(parthenon) rather than add_subdirectory) so a
+# misconfigured Parthenon fails with a clear message instead of a wall of
+# "no member named GetFFTManager in Mesh" compiler errors.
+if(DEFINED PARTHENON_ENABLE_FFT AND NOT PARTHENON_ENABLE_FFT)
+  message(FATAL_ERROR
+    "energy_transfer requires Parthenon to be built with -DPARTHENON_ENABLE_FFT=ON "
+    "(it exposes Mesh::GetFFTManager()/GetUniformGridHelper(), FFTManager, "
+    "UniformGridHelper, and CalcSpectrum, all of which this library depends on "
+    "unconditionally). Reconfigure Parthenon with that flag set.")
+endif()
+
+# ADIOS2: energy_transfer calls the raw ADIOS2 C++ API directly (ingest_adios2.cpp),
+# and Parthenon's own CMakeLists never links an adios2:: target onto Parthenon::parthenon
+# (only openPMD, HDF5, HeFFTe, etc.) -- so this find is not redundant, it mirrors what
+# the original example driver's CMakeLists already had to do for the same reason.
 if(NOT TARGET adios2::cxx_mpi)
   find_package(ADIOS2 REQUIRED COMPONENTS CXX MPI)
 endif()
+
+# openPMD: Parthenon's own CMakeLists links `target_link_libraries(parthenon PUBLIC
+# openPMD::openPMD)`, so when Parthenon is pulled in via add_subdirectory in this same
+# configure run (the common case: energy_transfer added as a subdirectory of an app that
+# already builds Parthenon, e.g. AthenaPK), the openPMD::openPMD target already exists
+# and this find_package call is skipped -- openPMD comes along for free via the PUBLIC
+# link to Parthenon::parthenon below. It only actually runs as a fallback for a truly
+# standalone build against an *installed* Parthenon, since parthenonConfig.cmake does not
+# re-export openPMD as a dependency for find_package(parthenon) consumers.
 if(NOT TARGET openPMD::openPMD)
   find_package(openPMD REQUIRED CONFIG)
 endif()
+
 find_package(MPI REQUIRED COMPONENTS CXX)
 
 add_library(energy_transfer

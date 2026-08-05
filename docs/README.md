@@ -19,6 +19,19 @@ prototype this library was extracted from
 (`athenapk/external/parthenon/example/energy_transfer/`, left untouched as a
 reference for verifying this refactor's numerical output).
 
+## Build prerequisite: Parthenon needs `-DPARTHENON_ENABLE_FFT=ON`
+
+`Mesh::GetFFTManager()`/`GetUniformGridHelper()`, `FFTManager`,
+`UniformGridHelper`, and `CalcSpectrum` -- everything this library depends
+on -- only exist in Parthenon when it was configured with
+`-DPARTHENON_ENABLE_FFT=ON` (the single flag for the whole FFT/HeFFTe
+machinery; older docs/branches may still call it `PARTHENON_ENABLE_HEFFTE`,
+but that name no longer exists in Parthenon's CMake). The top-level
+`CMakeLists.txt` here checks this and fails with a clear message rather than
+a wall of missing-member compiler errors, whenever the flag's value is
+visible to CMake (i.e. when Parthenon is added via `add_subdirectory`,
+which is the common case).
+
 ## Constraints
 
 Uniform grid, single mesh partition (`parthenon/mesh/pack_size = -1`),
@@ -66,14 +79,133 @@ term), following the pattern of an existing entry.
 
 ## Building
 
+There are two distinct ways to build this, matching the two ways to use it.
+
+### Offline / standalone (the `energy-transfer-offline` tool)
+
+Build this repo on its own, pointed at a Parthenon checkout:
+
 ```
 cmake -S . -B build \
   -DENERGY_TRANSFER_PARTHENON_SOURCE_DIR=/path/to/parthenon \
-  -DADIOS2_DIR=... -DopenPMD_DIR=...
+  -DPARTHENON_ENABLE_FFT=ON \
+  -DADIOS2_DIR=...
+cmake --build build
+./build/tools/energy_transfer_offline/energy-transfer-offline -i my_input.in
+```
+
+`-DPARTHENON_ENABLE_FFT=ON` is forwarded straight through to Parthenon's own
+`add_subdirectory` (it's a normal Parthenon CMake option), and is required
+per the prerequisite above. Pass through whatever else your Parthenon build
+normally needs (Kokkos arch flags, `-GNinja`, etc.) the same way -- e.g.
+mirroring an existing AthenaPK configure line:
+
+```
+cmake -S . -B build -GNinja \
+  -DENERGY_TRANSFER_PARTHENON_SOURCE_DIR=/path/to/athenapk/external/parthenon \
+  -DPARTHENON_ENABLE_FFT=ON -DKokkos_ENABLE_CUDA=OFF -DKokkos_ARCH_NATIVE=OFF \
+  -DADIOS2_DIR=/path/to/ADIOS2/install/lib64/cmake/adios2
 cmake --build build
 ```
 
-If built as `add_subdirectory()` from an application that already defines a
-`Parthenon::parthenon` target (e.g. AthenaPK, right after its own
-`add_subdirectory(external/parthenon)`), that target is reused automatically
-and `ENERGY_TRANSFER_PARTHENON_SOURCE_DIR` is not needed.
+`ADIOS2_DIR` (or an `ADIOS2_ROOT`/module-provided `adios2` package) is
+needed because `energy_transfer` calls the raw ADIOS2 API directly for the
+offline ingestion path. `openPMD_DIR` is normally **not** needed: whenever
+Parthenon itself is built via `add_subdirectory` -- which
+`ENERGY_TRANSFER_PARTHENON_SOURCE_DIR` does here -- Parthenon's own
+CMakeLists already links `openPMD::openPMD` `PUBLIC` onto
+`Parthenon::parthenon`, and that target is reused automatically. It's only
+required if you link against a separately *installed* Parthenon via
+`find_package(parthenon)`, since `parthenonConfig.cmake` does not re-export
+openPMD as a dependency in that case.
+
+### In-situ, linked into AthenaPK (or any other Parthenon app)
+
+The app's own build already provides `Parthenon::parthenon`
+(`ENERGY_TRANSFER_PARTHENON_SOURCE_DIR` is then not needed -- that target is
+reused automatically), so wiring this in is just: add this repo as a
+subdirectory, link the `energy_transfer` target, then call the library from
+your own code.
+
+1. **Make this checkout visible to AthenaPK's CMake.** Either point at it
+   directly (fastest for local development, no extra setup):
+
+   ```cmake
+   # in athenapk/CMakeLists.txt
+   add_subdirectory(/e/project1/jureap19/lenard/energy_transfer energy_transfer)
+   ```
+
+   or vendor it properly once you've pushed this repo somewhere, as a git
+   submodule at `athenapk/external/energy_transfer` (matching the existing
+   `external/parthenon`/`external/Kokkos` convention):
+
+   ```
+   git submodule add <url> external/energy_transfer
+   ```
+
+   and then `add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/external/energy_transfer energy_transfer)`.
+
+2. **Add that `add_subdirectory` call to `athenapk/CMakeLists.txt`**, right
+   after the existing Parthenon block so `Parthenon::parthenon` already
+   exists when this library's CMakeLists runs its `if(NOT TARGET ...)`
+   guards, and before `add_subdirectory(src)`:
+
+   ```cmake
+   # athenapk/CMakeLists.txt, between the existing lines
+   #   if(EXISTS .../external/parthenon/CMakeLists.txt)
+   #     add_subdirectory(.../external/parthenon parthenon)
+   #   else()
+   #     find_package(parthenon REQUIRED)
+   #   endif()
+   # and
+   #   add_subdirectory(src)
+   set(ENERGY_TRANSFER_BUILD_TOOLS OFF CACHE BOOL "" FORCE)  # skip the offline tool -- AthenaPK doesn't need it
+   set(ENERGY_TRANSFER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+   add_subdirectory(external/energy_transfer energy_transfer)  # or the direct path from step 1
+   ```
+
+3. **Link it into the `athenaPK` target**, in `athenapk/src/CMakeLists.txt`:
+
+   ```cmake
+   # was: target_link_libraries(athenaPK PRIVATE parthenon)
+   target_link_libraries(athenaPK PRIVATE parthenon energy_transfer)
+   ```
+
+4. **Call it from your problem generator's `UserWorkBeforeOutput`** (or
+   `UserMeshWorkBeforeOutput`/`UserWorkAfterLoop`/wherever you want it to
+   run -- the library doesn't care about cadence, that's entirely up to
+   you). `decaying_turbulence.cpp`'s `UserWorkBeforeOutput`
+   (`athenapk/src/pgen/decaying_turbulence.cpp:130`) already has exactly the
+   `Mesh*`/`ParameterInput*` this needs and already computes an FFT-based
+   diagnostic (magnetic helicity) the same way -- add the energy-transfer
+   call alongside it:
+
+   ```cpp
+   #include "energy_transfer/field_spec.hpp"
+   #include "energy_transfer/io_openpmd.hpp"
+   #include "energy_transfer/shell_transfer.hpp"
+
+   void UserWorkBeforeOutput(Mesh *pmesh, ParameterInput *pin,
+                             const parthenon::SimTime &tm) {
+     // ... existing helicity calculation ...
+
+     auto &md = pmesh->mesh_data.Get();
+     // AthenaPK's "prim" layout: IDN=0, IV1=1, IV2=2, IV3=3, IPR=4, IB1=5, IB2=6, IB3=7
+     // (from athenapk/src/main.hpp; pass your own enum values, this library
+     // has no AthenaPK dependency of its own).
+     auto spec = energy_transfer::MakeAthenaPKPrimitiveLiveSpec(
+         IDN, IV1, IV2, IV3, IPR, /*has_bfield=*/true, IB1, IB2, IB3);
+
+     energy_transfer::ShellTransferConfig cfg;
+     cfg.binning = energy_transfer::BinningSpec::Log(20);
+     cfg.terms = {"UUA", "UUC",
+                  {"BBA", energy_transfer::DecompositionMode::Total}};
+
+     auto result = energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg);
+     energy_transfer::WriteResult(result, "transfer", tm.ncycle);
+   }
+   ```
+
+   Nothing here touches `ProcessPackages`/`StateDescriptor` -- the whole
+   point of the live entry point is that it only needs the `Mesh*`/
+   `MeshData<Real>*` a hook like this already has.

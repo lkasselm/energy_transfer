@@ -231,7 +231,9 @@ Fourier amplitude, not magnetic energy, so no `1/2` factor is applied.
 
 ## Dependencies
 
-- Parthenon with HeFFTe enabled (`PARTHENON_ENABLE_HEFFTE`)
+- Parthenon with FFT enabled (`-DPARTHENON_ENABLE_FFT=ON` -- this flag was
+  renamed from `PARTHENON_ENABLE_HEFFTE` after this doc was originally
+  written; it's the single switch for the whole FFT/HeFFTe machinery)
 - ADIOS2 with CXX and MPI components (linked explicitly in CMakeLists.txt)
 - openPMD with ADIOS2 backend (for output)
 - Uniform grid only (`refinement = none`, `pack_size = -1`)
