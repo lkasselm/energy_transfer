@@ -12,7 +12,7 @@ namespace energy_transfer {
 using parthenon::Real;
 
 KOKKOS_INLINE_FUNCTION
-inline int ComponentWavenumber(const std::array<int, 3> &kji_vec, const int dir) {
+int ComponentWavenumber(const std::array<int, 3> &kji_vec, const int dir) {
   return kji_vec[2 - dir];
 }
 

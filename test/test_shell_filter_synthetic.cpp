@@ -8,6 +8,8 @@
 
 #include "energy_transfer/spectral_kernels.hpp"
 
+using parthenon::Real;
+
 // Single-rank smoke test: fills a real-space scalar field with one known
 // Fourier mode (kx=3) and checks that ShellFilter preserves it when the
 // shell contains |k|=3 and zeroes it out when the shell doesn't.

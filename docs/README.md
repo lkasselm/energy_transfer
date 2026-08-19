@@ -19,6 +19,22 @@ prototype this library was extracted from
 (`athenapk/external/parthenon/example/energy_transfer/`, left untouched as a
 reference for verifying this refactor's numerical output).
 
+## Getting the source
+
+Parthenon is vendored as a git submodule (`external/parthenon`, tracking
+`pgrete/energy-transfer` on `parthenon-hpc-lab/parthenon` -- the branch this
+library's FFT/spectral dependencies were developed against), mirroring the
+same nested-submodule convention AthenaPK itself uses for Kokkos/Parthenon.
+After cloning this repo:
+
+```
+git submodule update --init --recursive
+```
+
+(Not needed when this repo is added as `add_subdirectory()` from an app that
+already builds its own Parthenon, e.g. AthenaPK -- see "In-situ" below; that
+vendored copy is simply never configured in that case.)
+
 ## Build prerequisite: Parthenon needs `-DPARTHENON_ENABLE_FFT=ON`
 
 `Mesh::GetFFTManager()`/`GetUniformGridHelper()`, `FFTManager`,
@@ -83,13 +99,12 @@ There are two distinct ways to build this, matching the two ways to use it.
 
 ### Offline / standalone (the `energy-transfer-offline` tool)
 
-Build this repo on its own, pointed at a Parthenon checkout:
+Build this repo on its own -- the vendored `external/parthenon` submodule is
+used automatically since no other `Parthenon::parthenon` target exists yet:
 
 ```
-cmake -S . -B build \
-  -DENERGY_TRANSFER_PARTHENON_SOURCE_DIR=/path/to/parthenon \
-  -DPARTHENON_ENABLE_FFT=ON \
-  -DADIOS2_DIR=...
+git submodule update --init --recursive
+cmake -S . -B build -DPARTHENON_ENABLE_FFT=ON -DADIOS2_DIR=...
 cmake --build build
 ./build/tools/energy_transfer_offline/energy-transfer-offline -i my_input.in
 ```
@@ -102,7 +117,6 @@ mirroring an existing AthenaPK configure line:
 
 ```
 cmake -S . -B build -GNinja \
-  -DENERGY_TRANSFER_PARTHENON_SOURCE_DIR=/path/to/athenapk/external/parthenon \
   -DPARTHENON_ENABLE_FFT=ON -DKokkos_ENABLE_CUDA=OFF -DKokkos_ARCH_NATIVE=OFF \
   -DADIOS2_DIR=/path/to/ADIOS2/install/lib64/cmake/adios2
 cmake --build build
@@ -110,40 +124,32 @@ cmake --build build
 
 `ADIOS2_DIR` (or an `ADIOS2_ROOT`/module-provided `adios2` package) is
 needed because `energy_transfer` calls the raw ADIOS2 API directly for the
-offline ingestion path. `openPMD_DIR` is normally **not** needed: whenever
-Parthenon itself is built via `add_subdirectory` -- which
-`ENERGY_TRANSFER_PARTHENON_SOURCE_DIR` does here -- Parthenon's own
-CMakeLists already links `openPMD::openPMD` `PUBLIC` onto
-`Parthenon::parthenon`, and that target is reused automatically. It's only
-required if you link against a separately *installed* Parthenon via
+offline ingestion path. `openPMD_DIR` is normally **not** needed: Parthenon's
+own CMakeLists already links `openPMD::openPMD` `PUBLIC` onto
+`Parthenon::parthenon` whenever it's built via `add_subdirectory` (true here,
+via the vendored submodule), so that target is reused automatically. It's
+only required if you link against a separately *installed* Parthenon via
 `find_package(parthenon)`, since `parthenonConfig.cmake` does not re-export
 openPMD as a dependency in that case.
 
 ### In-situ, linked into AthenaPK (or any other Parthenon app)
 
-The app's own build already provides `Parthenon::parthenon`
-(`ENERGY_TRANSFER_PARTHENON_SOURCE_DIR` is then not needed -- that target is
-reused automatically), so wiring this in is just: add this repo as a
+The app's own build already provides `Parthenon::parthenon`, so this
+library's own vendored submodule is simply never configured (per the guard
+in "Getting the source" above) -- wiring this in is just: add this repo as a
 subdirectory, link the `energy_transfer` target, then call the library from
 your own code.
 
-1. **Make this checkout visible to AthenaPK's CMake.** Either point at it
-   directly (fastest for local development, no extra setup):
-
-   ```cmake
-   # in athenapk/CMakeLists.txt
-   add_subdirectory(/e/project1/jureap19/lenard/energy_transfer energy_transfer)
-   ```
-
-   or vendor it properly once you've pushed this repo somewhere, as a git
-   submodule at `athenapk/external/energy_transfer` (matching the existing
+1. **Make this checkout visible to AthenaPK's CMake**, as a git submodule at
+   `athenapk/external/energy_transfer` (matching the existing
    `external/parthenon`/`external/Kokkos` convention):
 
    ```
    git submodule add <url> external/energy_transfer
    ```
 
-   and then `add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/external/energy_transfer energy_transfer)`.
+   (or point `add_subdirectory` at a plain local checkout path instead, if
+   you don't want to vendor it as a submodule yet).
 
 2. **Add that `add_subdirectory` call to `athenapk/CMakeLists.txt`**, right
    after the existing Parthenon block so `Parthenon::parthenon` already

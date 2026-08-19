@@ -12,6 +12,8 @@
 #include "energy_transfer/field_spec.hpp"
 #include "energy_transfer/shell_transfer.hpp"
 
+using parthenon::Real;
+
 namespace {
 
 enum { IDN = 0, IV1 = 1, IV2 = 2, IV3 = 3, IPR = 4, NPRIM = 5 };

@@ -69,10 +69,23 @@ void WriteResult(const TransferResult &result, const std::string &output_file,
                           const parthenon::HostArray2D<TransferReal> &matrix) {
     auto mesh = it.meshes[name];
     auto comp = mesh[openPMD::MeshRecordComponent::SCALAR];
-    openPMD::Extent extent = {static_cast<uint64_t>(matrix.extent(0)),
-                              static_cast<uint64_t>(matrix.extent(1))};
+    const auto n_q = matrix.extent(0);
+    const auto n_k = matrix.extent(1);
+    // TransferResult::matrices is stored in-memory as (Q, K) -- dim0=donor
+    // shell, dim1=receiver shell (see shell_transfer.hpp) -- but the original
+    // driver's on-disk convention (and any tooling built against it) is
+    // matrix(kk, q): row=K, col=Q. Transpose here at the I/O boundary so
+    // output *files* match that established layout exactly, without
+    // disturbing this library's own (Q,K) C++ API.
+    std::vector<TransferReal> transposed(n_q * n_k);
+    for (std::size_t qi = 0; qi < n_q; qi++) {
+      for (std::size_t ki = 0; ki < n_k; ki++) {
+        transposed[ki * n_q + qi] = matrix(qi, ki);
+      }
+    }
+    openPMD::Extent extent = {static_cast<uint64_t>(n_k), static_cast<uint64_t>(n_q)};
     comp.resetDataset(openPMD::Dataset(openPMD::determineDatatype<TransferReal>(), extent));
-    comp.storeChunkRaw(matrix.data(), {0, 0}, extent);
+    comp.storeChunkRaw(transposed.data(), {0, 0}, extent);
     it.seriesFlush();
   };
   for (const auto &[name, matrix] : result.matrices) {

@@ -5,6 +5,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <string>
 #include <tuple>
 
 #include <kokkos_abstraction.hpp>
@@ -396,9 +397,20 @@ ShellTransferConfig ShellTransferConfig::FromInput(parthenon::ParameterInput *pi
     cfg.binning = BinningSpec::Linear(num_shells);
   } else if (binning_str == "log") {
     cfg.binning = BinningSpec::Log(num_shells);
+  } else if (binning_str == "custom") {
+    const auto edges_str = pin->GetOrAddString("energy_transfer", "shell_edges", "");
+    std::vector<Real> edges;
+    for (const auto &token : SplitCommaList(edges_str)) {
+      edges.push_back(static_cast<Real>(std::stod(token)));
+    }
+    PARTHENON_REQUIRE_THROWS(edges.size() >= 2,
+                             "energy_transfer/binning=custom requires "
+                             "energy_transfer/shell_edges to list at least 2 "
+                             "comma-separated bin-edge values, e.g. "
+                             "shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0");
+    cfg.binning = BinningSpec::Custom(std::move(edges));
   } else {
-    PARTHENON_FAIL("energy_transfer/binning must be 'lin' or 'log' (use BinningSpec::Custom "
-                   "directly in code for a custom edge list)");
+    PARTHENON_FAIL("energy_transfer/binning must be 'lin', 'log', or 'custom'");
   }
 
   const auto terms_str = pin->GetOrAddString("energy_transfer", "terms", "UUA,UUC");
