@@ -101,6 +101,7 @@ add_library(energy_transfer
   src/convert.cpp
   src/ingest_live.cpp
   src/ingest_adios2.cpp
+  src/ingest_phdf.cpp
   src/registry.cpp
   src/shell_transfer.cpp
   src/io_openpmd.cpp

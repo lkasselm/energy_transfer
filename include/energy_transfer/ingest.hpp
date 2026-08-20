@@ -14,10 +14,16 @@
 
 namespace energy_transfer {
 
-// Resolved ADIOS2/bp5 variable names to read. Each vector-valued field is
-// three separate variable names (x/y/z), matching how the offline snapshot
-// format stores components.
-struct ADIOS2FieldNaming {
+enum class InputFileFormat { ADIOS2, ParthenonHDF5 };
+
+// Detects the offline snapshot format from input_file's extension (.bp ->
+// ADIOS2; .phdf/.h5/.hdf5 -> Parthenon HDF5). Throws for any other suffix.
+InputFileFormat DetectInputFileFormat(const std::string &input_file);
+
+// Resolved variable/component names to read from an offline snapshot file.
+// Each vector-valued field is three separate names (x/y/z), matching how
+// both supported file formats store components.
+struct FileFieldNaming {
   std::string rho;
   bool input_conserved = false;
   std::array<std::string, 3> mom_or_vel;      // momentum_{x,y,z} or velocity_{x,y,z}
@@ -27,10 +33,23 @@ struct ADIOS2FieldNaming {
   Real gamma = 5.0 / 3.0;
 
   // Convenience: reads the same <energy_transfer>/input_*_field parameters
-  // the original driver used (mesh/field name pairs with defaults), for
-  // callers driving configuration from a parthenon input deck.
-  static ADIOS2FieldNaming FromInput(parthenon::ParameterInput *pin, bool need_mag,
-                                     bool need_pres_or_energy, bool need_acc);
+  // the original driver used (mesh/field name pairs with defaults, only
+  // meaningful for ADIOS2 -- ignored for Parthenon HDF5, which has no mesh/
+  // prefix concept), for callers driving configuration from a parthenon
+  // input deck.
+  static FileFieldNaming FromInputADIOS2(parthenon::ParameterInput *pin, bool need_mag,
+                                         bool need_pres_or_energy, bool need_acc);
+
+  // Same idea, but defaulting to AthenaPK's native prim/cons component names
+  // (see athenapk/src/hydro/hydro.cpp) instead of ADIOS2's flat/mesh naming,
+  // since a Parthenon HDF5 dump stores AthenaPK's own field layout directly.
+  static FileFieldNaming FromInputPHDF(parthenon::ParameterInput *pin, bool need_mag,
+                                       bool need_pres_or_energy, bool need_acc);
+
+  // Picks FromInputADIOS2 or FromInputPHDF based on input_file's extension.
+  static FileFieldNaming FromInput(parthenon::ParameterInput *pin,
+                                   const std::string &input_file, bool need_mag,
+                                   bool need_pres_or_energy, bool need_acc);
 };
 
 // Gathers fields from a live MeshData container according to spec, into the
@@ -44,7 +63,16 @@ FlatFields GatherLiveFields(parthenon::Mesh *pmesh, parthenon::MeshData<Real> *m
 // flat-array representation, selecting each rank's local box via the mesh's
 // UniformGridHelper.
 FlatFields ReadADIOS2Fields(parthenon::Mesh *pmesh, const std::string &input_file,
-                            const ADIOS2FieldNaming &naming);
+                            const FileFieldNaming &naming);
+
+// Reads fields directly from a Parthenon HDF5 (.phdf/.h5/.hdf5) output file
+// -- the format AthenaPK itself writes -- via raw HDF5 hyperslab reads of
+// only the region overlapping this rank's local box. Requires Parthenon to
+// have been built with HDF5 support (PARTHENON_DISABLE_HDF5 not set);
+// throws a clear error otherwise. Requires a single-level (unrefined) input
+// mesh, consistent with energy_transfer's general uniform-grid requirement.
+FlatFields ReadPHDFFields(parthenon::Mesh *pmesh, const std::string &input_file,
+                          const FileFieldNaming &naming);
 
 } // namespace energy_transfer
 

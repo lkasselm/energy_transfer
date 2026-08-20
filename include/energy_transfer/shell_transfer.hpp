@@ -72,7 +72,7 @@ struct TransferResult {
 
 // Which real-space fields ingestion must load for the requested terms/
 // spectra to be computable. Used to build a minimal LiveFieldSpec/
-// ADIOS2FieldNaming before ingestion runs.
+// FileFieldNaming before ingestion runs.
 struct FieldRequirements {
   bool mag = false;
   bool pres_or_energy = false;
@@ -92,10 +92,13 @@ TransferResult ComputeShellTransferLive(parthenon::Mesh *pmesh, parthenon::MeshD
                                         const LiveFieldSpec &spec,
                                         const ShellTransferConfig &cfg);
 
-// Offline entry point: reads an ADIOS2/bp5 snapshot directly.
+// Offline entry point: reads an ADIOS2/bp5 or Parthenon HDF5 (.phdf/.h5/
+// .hdf5) snapshot directly, dispatching on input_file's extension (see
+// DetectInputFileFormat in ingest.hpp) -- naming must have been built with
+// the matching FileFieldNaming::FromInputADIOS2/FromInputPHDF/FromInput.
 TransferResult ComputeShellTransferFromFile(parthenon::Mesh *pmesh,
                                             const std::string &input_file,
-                                            const ADIOS2FieldNaming &naming,
+                                            const FileFieldNaming &naming,
                                             const ShellTransferConfig &cfg);
 
 } // namespace energy_transfer

@@ -11,8 +11,12 @@ source tree) with two ways to use it:
    already have, then `energy_transfer::WriteResult(...)` to dump the
    result. No `StateDescriptor`/package registration required.
 2. **Offline**, via the `energy-transfer-offline` executable built alongside
-   the library, which reads an ADIOS2/bp5 snapshot (e.g. converted from Enzo
-   via `scripts/enzo_to_bp5.py`) and runs the same computation.
+   the library, which reads either an ADIOS2/bp5 snapshot (e.g. converted
+   from Enzo via `scripts/enzo_to_bp5.py`) or a Parthenon HDF5
+   (`.phdf`/`.h5`/`.hdf5`) output file -- the format AthenaPK itself writes,
+   read via raw HDF5 hyperslab reads of just the region each rank needs --
+   and runs the same computation. The format is picked automatically from
+   `input_file`'s extension.
 
 See `docs/plan.md` for the physics background and the historical single-file
 prototype this library was extracted from
@@ -71,10 +75,12 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
     selected from the library's fixed built-in set -- see below) and
     `spectrum_names`.
   - `ComputeShellTransferLive(Mesh*, MeshData<Real>*, LiveFieldSpec, ShellTransferConfig)`
-  - `ComputeShellTransferFromFile(Mesh*, input_file, ADIOS2FieldNaming, ShellTransferConfig)`
+  - `ComputeShellTransferFromFile(Mesh*, input_file, FileFieldNaming, ShellTransferConfig)`
+    -- dispatches to the ADIOS2 or Parthenon HDF5 reader based on
+    `input_file`'s extension (`ingest.hpp`'s `DetectInputFileFormat`).
   - `ComputeFieldRequirements(cfg)` -- tells you which of magnetic field /
     pressure-or-energy / acceleration the requested terms actually need, so
-    you can build a minimal `LiveFieldSpec`/`ADIOS2FieldNaming` (the offline
+    you can build a minimal `LiveFieldSpec`/`FileFieldNaming` (the offline
     tool does this automatically).
 - `io_openpmd.hpp` -- `WriteResult(...)` writes every computed term/spectrum
   as a named openPMD mesh record to a `.bp` file.

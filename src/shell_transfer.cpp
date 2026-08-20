@@ -343,7 +343,7 @@ TransferResult ComputeShellTransferLive(parthenon::Mesh *pmesh, parthenon::MeshD
 
 TransferResult ComputeShellTransferFromFile(parthenon::Mesh *pmesh,
                                             const std::string &input_file,
-                                            const ADIOS2FieldNaming &naming,
+                                            const FileFieldNaming &naming,
                                             const ShellTransferConfig &cfg) {
   const auto req = ComputeFieldRequirements(cfg);
   PARTHENON_REQUIRE_THROWS(!req.mag || naming.mag.has_value(),
@@ -360,7 +360,15 @@ TransferResult ComputeShellTransferFromFile(parthenon::Mesh *pmesh,
                            "ComputeShellTransferFromFile: converting conserved total energy "
                            "to pressure requires naming.mag to be set.");
 
-  auto fields = ReadADIOS2Fields(pmesh, input_file, naming);
+  FlatFields fields;
+  switch (DetectInputFileFormat(input_file)) {
+  case InputFileFormat::ADIOS2:
+    fields = ReadADIOS2Fields(pmesh, input_file, naming);
+    break;
+  case InputFileFormat::ParthenonHDF5:
+    fields = ReadPHDFFields(pmesh, input_file, naming);
+    break;
+  }
   ConvertConservedToPrimitive(fields);
   return ComputeShellTransfer(pmesh, fields, cfg);
 }

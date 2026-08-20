@@ -1,0 +1,127 @@
+# ========================================================================================
+#  energy_transfer -- offline post-processing input deck
+#  Adapted from the original parthenon/example/energy_transfer/parthinput.example.
+#  See the notes below wherever an option's meaning or availability changed.
+# ========================================================================================
+
+<parthenon/job>
+problem_id = energy_transfer
+
+<parthenon/mesh>
+refinement = none
+nghost = 2
+
+nx1 = 64
+x1min = 0.0
+x1max = 6.283185307179586
+ix1_bc = periodic
+ox1_bc = periodic
+
+nx2 = 64
+x2min = 0.0
+x2max = 6.283185307179586
+ix2_bc = periodic
+ox2_bc = periodic
+
+nx3 = 64
+x3min = 0.0
+x3max = 6.283185307179586
+ix3_bc = periodic
+ox3_bc = periodic
+
+num_packs = 1
+
+<parthenon/meshblock>
+nx1 = 32
+nx2 = 32
+nx3 = 64
+
+<energy_transfer>
+# input_file = enzo_data.bp                # read from ADIOS2/bp5 file (must end in .bp)
+# input_file = parthenon.prim.final.phdf   # or read directly from a Parthenon HDF5 output
+#                                           # file (must end in .phdf, .h5, or .hdf5) --
+#                                           # requires Parthenon built with HDF5 support.
+# The format is auto-detected from input_file's extension (DetectInputFileFormat in
+# ingest.hpp); omit input_file entirely to use meshblock fields instead.
+input_file = parthenon.out3.final.00050.bp
+input_quantity_type = conserved  # primitive or conserved
+
+# --- ADIOS2/bp5 input ---
+input_variable_prefix = /data/50/meshes
+input_rho_mesh   = cons_lvl0
+input_rho_field  = density
+input_momentum_mesh     = cons_lvl0
+input_momentum_x_field  = momentum_density_1
+input_momentum_y_field  = momentum_density_2
+input_momentum_z_field  = momentum_density_3
+input_magnetic_mesh     = cons_lvl0
+input_magnetic_x_field  = magnetic_field_1
+input_magnetic_y_field  = magnetic_field_2
+input_magnetic_z_field  = magnetic_field_3
+input_total_energy_field = total_energy_density
+input_total_energy_mesh = cons_lvl0
+
+# For mesh/component style variables, set e.g. input_velocity_mesh = velocity and
+# input_velocity_x_field = x. The resolved path is prefix/mesh/field.
+# input_acceleration_x_field = acc_1  # no standard AthenaPK output name; override as needed
+# input_acceleration_y_field = acc_2
+# input_acceleration_z_field = acc_3
+
+# --- Parthenon HDF5 (.phdf/.h5/.hdf5) input ---
+# Only used if input_file above ends in .phdf/.h5/.hdf5 instead of .bp. The same
+# input_*_field parameter names are reused (input_*_mesh and input_variable_prefix are
+# ADIOS2-only and ignored here), but they name a component of AthenaPK's native
+# "prim"/"cons" fields (see athenapk/src/hydro/hydro.cpp).
+# Defaults if input_quantity_type = primitive:
+#   input_rho_field           = prim_density
+#   input_velocity_x_field    = prim_velocity_1
+#   input_velocity_y_field    = prim_velocity_2
+#   input_velocity_z_field    = prim_velocity_3
+#   input_pressure_field      = prim_pressure
+# Defaults if input_quantity_type = conserved:
+#   input_rho_field           = prim_density
+#   input_momentum_x_field    = cons_momentum_density_1
+#   input_momentum_y_field    = cons_momentum_density_2
+#   input_momentum_z_field    = cons_momentum_density_3
+#   input_total_energy_field  = cons_total_energy_density
+# Defaults regardless of input_quantity_type:
+#   input_magnetic_x_field    = prim_magnetic_field_1
+#   input_magnetic_y_field    = prim_magnetic_field_2
+#   input_magnetic_z_field    = prim_magnetic_field_3
+# No standard AthenaPK output name for acceleration -- override if needed:
+#   input_acceleration_x_field = acc_1
+#   input_acceleration_y_field = acc_2
+#   input_acceleration_z_field = acc_3
+# Requires a single-level (unrefined) mesh matching this deck's <parthenon/mesh> size.
+
+# --- Binning ---
+# "test" was renamed to "custom" and now takes its edges from shell_edges=
+# instead of being hardcoded, so it can express any fixed edge list, not just
+# the old debug one. This reproduces the old binning=test edges exactly:
+# {0.5, 1.5, 2.5, 16.0, 26.5, 28.5, 32.0} -> 6 shells. num_shells is unused
+# for custom binning (the edge count determines the number of shells).
+binning = custom
+shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0
+
+# --- Terms ---
+# NOTE: there's no more one-boolean-per-term switch (compute_UU, compute_BB,
+# ...). Request terms by name instead, comma-separated, optionally with a
+# ":mode" suffix (full/by_sender/by_receiver/total) -- see docs/README.md.
+# The old compute_UU/compute_BB/compute_UBTb flags each gated more than one
+# matrix, so they expand to multiple names below:
+#   compute_UU=true    -> UUA,UUC
+#   compute_BB=true    -> BBA,BBC
+#   compute_BUT=true   -> BUT
+#   compute_UBTb=true  -> UBTb,UBTbA,UBTbC
+#   compute_BUPbb=true -> BUPbb
+#   compute_UBPbb=true -> UBPbb
+#   compute_PU=true    -> PU
+#   compute_FU=false   -> (omitted)
+terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU
+
+# --- Spectra ---
+spectra = spec_U,spec_rho,spec_W,spec_B
+
+gamma = 1.666667
+output_file = output_openpmd
+output_number = 0

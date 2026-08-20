@@ -30,16 +30,16 @@ int main(int argc, char *argv[]) {
 
     PARTHENON_REQUIRE_THROWS(pin->DoesParameterExist("energy_transfer", "input_file"),
                              "energy-transfer-offline requires <energy_transfer>/input_file "
-                             "to be set to an ADIOS2/bp5 snapshot.");
+                             "to be set to an ADIOS2/bp5 (.bp) or Parthenon HDF5 "
+                             "(.phdf/.h5/.hdf5) snapshot.");
     const auto input_file = pin->GetString("energy_transfer", "input_file");
     const auto output_file = pin->GetOrAddString("energy_transfer", "output_file", "transfer");
     const auto output_number = pin->GetOrAddInteger("energy_transfer", "output_number", 0);
 
     auto cfg = energy_transfer::ShellTransferConfig::FromInput(pin);
     const auto req = energy_transfer::ComputeFieldRequirements(cfg);
-    const auto naming = energy_transfer::ADIOS2FieldNaming::FromInput(pin, req.mag,
-                                                                       req.pres_or_energy,
-                                                                       req.acc);
+    const auto naming = energy_transfer::FileFieldNaming::FromInput(
+        pin, input_file, req.mag, req.pres_or_energy, req.acc);
 
     auto result = energy_transfer::ComputeShellTransferFromFile(pmesh, input_file, naming, cfg);
     energy_transfer::WriteResult(result, output_file, output_number);

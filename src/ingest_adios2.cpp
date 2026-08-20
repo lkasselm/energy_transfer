@@ -24,11 +24,40 @@ std::string JoinInputName(const std::string &prefix, const std::string &mesh,
   return name;
 }
 
+bool HasSuffix(const std::string &s, const std::string &suffix) {
+  return s.size() >= suffix.size() &&
+        s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 } // namespace
 
-ADIOS2FieldNaming ADIOS2FieldNaming::FromInput(parthenon::ParameterInput *pin, bool need_mag,
-                                               bool need_pres_or_energy, bool need_acc) {
-  ADIOS2FieldNaming naming;
+InputFileFormat DetectInputFileFormat(const std::string &input_file) {
+  if (HasSuffix(input_file, ".bp")) return InputFileFormat::ADIOS2;
+  if (HasSuffix(input_file, ".phdf") || HasSuffix(input_file, ".h5") ||
+      HasSuffix(input_file, ".hdf5")) {
+    return InputFileFormat::ParthenonHDF5;
+  }
+  PARTHENON_FAIL("energy_transfer/input_file must be an ADIOS2/bp5 file (.bp) or a "
+                 "Parthenon HDF5 output file (.phdf, .h5, or .hdf5), got: " + input_file);
+  return InputFileFormat::ADIOS2;
+}
+
+FileFieldNaming FileFieldNaming::FromInput(parthenon::ParameterInput *pin,
+                                           const std::string &input_file, bool need_mag,
+                                           bool need_pres_or_energy, bool need_acc) {
+  switch (DetectInputFileFormat(input_file)) {
+  case InputFileFormat::ADIOS2:
+    return FromInputADIOS2(pin, need_mag, need_pres_or_energy, need_acc);
+  case InputFileFormat::ParthenonHDF5:
+    return FromInputPHDF(pin, need_mag, need_pres_or_energy, need_acc);
+  }
+  PARTHENON_FAIL("energy_transfer: unreachable");
+  return FileFieldNaming{};
+}
+
+FileFieldNaming FileFieldNaming::FromInputADIOS2(parthenon::ParameterInput *pin, bool need_mag,
+                                                 bool need_pres_or_energy, bool need_acc) {
+  FileFieldNaming naming;
 
   const auto input_quantity_type =
       pin->GetOrAddString("energy_transfer", "input_quantity_type", "primitive");
@@ -91,7 +120,7 @@ ADIOS2FieldNaming ADIOS2FieldNaming::FromInput(parthenon::ParameterInput *pin, b
 }
 
 FlatFields ReadADIOS2Fields(parthenon::Mesh *pmesh, const std::string &input_file,
-                            const ADIOS2FieldNaming &naming) {
+                            const FileFieldNaming &naming) {
   PARTHENON_REQUIRE_THROWS(
       input_file.size() >= 3 && input_file.substr(input_file.size() - 3) == ".bp",
       "input_file must be an ADIOS2/bp5 file (ending in .bp), got: " + input_file);
