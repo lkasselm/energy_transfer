@@ -20,8 +20,7 @@ source tree) with two ways to use it:
 
 See `docs/plan.md` for the physics background and the historical single-file
 prototype this library was extracted from
-(`athenapk/external/parthenon/example/energy_transfer/`, left untouched as a
-reference for verifying this refactor's numerical output).
+(https://github.com/parthenon-hpc-lab/parthenon/tree/pgrete/energy-transfer).
 
 ## Getting the source
 
