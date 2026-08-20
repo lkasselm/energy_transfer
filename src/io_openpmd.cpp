@@ -108,10 +108,13 @@ void WriteResult(const TransferResult &result, const std::string &output_file,
     }
     it.seriesFlush();
   };
+  // "/" is a reserved path separator in ADIOS2 and is rejected outright in dataset
+  // names (not just a cosmetic/hierarchy issue) -- use "_" instead of "/" to join
+  // the spectrum name and its component.
   for (const auto &[name, spectrum] : result.spectra) {
-    write_vector_from_matrix(name + "/pow_sum", spectrum, 0);
-    write_vector_from_matrix(name + "/k_sum", spectrum, 1);
-    write_vector_from_matrix(name + "/count_sum", spectrum, 2);
+    write_vector_from_matrix(name + "_pow_sum", spectrum, 0);
+    write_vector_from_matrix(name + "_k_sum", spectrum, 1);
+    write_vector_from_matrix(name + "_count_sum", spectrum, 2);
   }
 
   series.close();

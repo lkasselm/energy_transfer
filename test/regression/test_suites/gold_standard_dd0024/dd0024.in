@@ -1,0 +1,71 @@
+# ========================================================================================
+#  energy_transfer -- gold-standard regression test input deck
+#  Validates against github.com/pgrete/energy-transfer-analysis's own checked-in test
+#  fixture (testing/0024-All-Forc-Pres-testing-128_HDF-gold.pkl). See
+#  gold_standard_dd0024.py / fetch_and_convert.py / README.md in this directory.
+# ========================================================================================
+
+<parthenon/job>
+problem_id = gold_standard_dd0024
+
+<parthenon/mesh>
+refinement = none
+nghost = 2
+
+# Domain size must match what enzo_to_bp5.py actually reports for this snapshot
+# ("Domain: [0.0, 1.0]^3, L = 1.0" -- a unit box, not the 2*pi convention used in
+# this library's other example/test decks). This directly feeds
+# two_pi_over_L = 2*pi/Lx, which every spectral derivative (i.e. every term except
+# FU) scales by -- getting this wrong doesn't crash anything, it just silently
+# scales every derivative-based term by a constant factor (2*pi/1.0 vs 2*pi/(2*pi)
+# = a 2*pi mismatch), which is exactly what happened here the first time around.
+nx1 = 128
+x1min = 0.0
+x1max = 1.0
+ix1_bc = periodic
+ox1_bc = periodic
+
+nx2 = 128
+x2min = 0.0
+x2max = 1.0
+ix2_bc = periodic
+ox2_bc = periodic
+
+nx3 = 128
+x3min = 0.0
+x3max = 1.0
+ix3_bc = periodic
+ox3_bc = periodic
+
+num_packs = 1
+
+<parthenon/meshblock>
+nx1 = 128
+nx2 = 128
+nx3 = 128
+
+<energy_transfer>
+# input_file is injected at test time by gold_standard_dd0024.py's Prepare() via
+# -i dd0024.in energy_transfer/input_file=<cache>/enzo_data_dd0024.bp -- it doesn't
+# exist until the DD0024 snapshot has been fetched and converted.
+input_quantity_type = primitive
+
+# Reproduces the gold pickle's binning exactly: 6 shells, edges
+# [0.5, 1.5, 2.5, 16.0, 26.5, 28.5, 32.0] (the upstream tool's "binning=test").
+binning = custom
+shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0
+
+# All 12 of this library's built-in terms -- every one of these names matches the
+# gold pickle's own term names exactly (same formulas, same signs).
+terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU,FU
+
+# The gold pickle comparison doesn't use spectra -- explicit empty here so this
+# doesn't silently pick up ShellTransferConfig::FromInput's default (spec_U).
+spectra =
+
+# Matches the exact simulation this gold data came from -- not a generic ideal-gas
+# default. Do not "fix" this to 5/3.
+gamma = 1.666667
+
+output_file = gold_standard_dd0024_output
+output_number = 0

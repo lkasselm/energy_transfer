@@ -25,10 +25,15 @@ reference for verifying this refactor's numerical output).
 
 ## Getting the source
 
-Parthenon is vendored as a git submodule (`external/parthenon`, tracking
-`pgrete/energy-transfer` on `parthenon-hpc-lab/parthenon` -- the branch this
-library's FFT/spectral dependencies were developed against), mirroring the
-same nested-submodule convention AthenaPK itself uses for Kokkos/Parthenon.
+Parthenon is vendored as a git submodule (`external/parthenon`, pinned to a
+commit on `develop`, `parthenon-hpc-lab/parthenon`'s default branch -- the
+FFT/spectral machinery this library depends on has been merged upstream, so
+both this repo and AthenaPK's own submodule now track the same mainline
+branch), mirroring the same nested-submodule convention AthenaPK itself
+uses for Kokkos/Parthenon. `.gitmodules` doesn't pin a `branch =` (`develop`
+already is the remote's default, so `git submodule update --remote` resolves
+it via `origin/HEAD` on its own) -- either way, the checkout stays pinned to
+whatever commit was current until a `--remote` update manually bumps it.
 After cloning this repo:
 
 ```
