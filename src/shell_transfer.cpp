@@ -136,7 +136,31 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
 
   const auto qnames = QuantityNamesForTerms(cfg.terms);
   const auto tags = BaseFieldClosure(qnames);
-  const bool needs_U = tags.count("U") > 0;
+
+  // Terms requesting mediator decomposition need their quantities'
+  // mediator_only_base_fields too (e.g. FT_U for U_dot_grad_W/U_dot_grad_B,
+  // otherwise unneeded), and must actually have a decomposable mediator --
+  // some terms' only mediator is a scalar normalization (rho), which can't
+  // be shell-restricted.
+  const auto &term_table_for_reqs = BuiltinTerms();
+  const auto &quantity_table_for_reqs = BuiltinQuantities();
+  std::set<std::string> mediator_tags;
+  for (auto &tr : cfg.terms) {
+    if (!tr.mode.mediator_resolved) continue;
+    const auto &term = term_table_for_reqs.at(tr.name);
+    const auto &q_side = quantity_table_for_reqs.at(term.q_side_quantity);
+    const auto &k_side = quantity_table_for_reqs.at(term.k_side_quantity);
+    PARTHENON_REQUIRE_THROWS(
+        q_side.has_decomposable_mediator || k_side.has_decomposable_mediator,
+        "energy_transfer: term '" + tr.name +
+            "' has no decomposable mediator field (its mediator, if any, is a scalar "
+            "normalization like rho, which can't be shell-decomposed) -- "
+            "DecompositionMode::mediator_resolved must be false for this term.");
+    for (auto &t : q_side.mediator_only_base_fields) mediator_tags.insert(t);
+    for (auto &t : k_side.mediator_only_base_fields) mediator_tags.insert(t);
+  }
+
+  const bool needs_U = tags.count("U") > 0 || mediator_tags.count("U") > 0;
   const bool needs_B = tags.count("B") > 0;
   const bool needs_P = tags.count("P") > 0;
   const bool needs_Acc = tags.count("Acc") > 0;
@@ -218,6 +242,13 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
           }
         });
     Kokkos::fence();
+    // Computed unconditionally alongside b_flat (not just when Divb is also
+    // needed) so any term shell-decomposing the b mediator (BUT/UBTb/
+    // UBTbA) can filter it without recomputing this forward transform.
+    ft.FT_b = parthenon::ParArray1D<Kokkos::complex<Real>>("FT_b", 3 * fft_size_outbox);
+    for (int n = 0; n < 3; n++) {
+      FFTMgr->Forward(b_flat.data() + n * fft_size_inbox, ft.FT_b.data() + n * fft_size_outbox);
+    }
   }
   if (needs_DivU) {
     PARTHENON_REQUIRE_THROWS(needs_U, "energy_transfer: internal error -- DivU requires FT_U");
@@ -227,13 +258,9 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   }
   if (needs_Divb) {
     PARTHENON_REQUIRE_THROWS(needs_b, "energy_transfer: internal error -- Divb requires b_flat");
-    parthenon::ParArray1D<Kokkos::complex<Real>> FT_b("FT_b_tmp", 3 * fft_size_outbox);
-    for (int n = 0; n < 3; n++) {
-      FFTMgr->Forward(aux.b_flat.data() + n * fft_size_inbox, FT_b.data() + n * fft_size_outbox);
-    }
     aux.Divb = parthenon::ParArray1D<Real>("Divb", fft_size_inbox);
     parthenon::ParArray1D<Kokkos::complex<Real>> scratch("Divb_scratch", fft_size_outbox);
-    SpectralDivergence(FFTMgr, FT_b, scratch, aux.Divb, two_pi_over_L);
+    SpectralDivergence(FFTMgr, ft.FT_b, scratch, aux.Divb, two_pi_over_L);
   }
 
   ShellWorkspace ws_template;
@@ -251,18 +278,27 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   const auto &quantity_table = BuiltinQuantities();
   const auto &term_table = BuiltinTerms();
 
-  // Memoizes derived-quantity evaluations by (name, k_low, k_high) so terms
-  // that share a quantity (e.g. "W_filter" as the K-side of UU/BUT/BUPbb/
-  // PU/FU) only pay for it once per shell within this call.
-  using CacheKey = std::tuple<std::string, Real, Real>;
+  // Memoizes derived-quantity evaluations by (name, k_low, k_high, m_low,
+  // m_high) so terms that share a quantity (e.g. "W_filter" as the K-side of
+  // UU/BUT/BUPbb/PU/FU) only pay for it once per (shell, mediator-shell)
+  // pair within this call. When the mediator isn't active, m_low/m_high are
+  // normalized to a fixed placeholder so all such evaluations share one
+  // cache entry regardless of the (otherwise-unused) collapsed bounds.
+  using CacheKey = std::tuple<std::string, Real, Real, Real, Real>;
   std::map<CacheKey, parthenon::ParArray1D<Real>> cache;
-  auto evaluate = [&](const std::string &qname, Real k_low, Real k_high) {
-    CacheKey key{qname, k_low, k_high};
+  auto evaluate = [&](const std::string &qname, Real k_low, Real k_high, bool mediator_active,
+                      Real m_low, Real m_high) {
+    const Real m_low_key = mediator_active ? m_low : Real(0.0);
+    const Real m_high_key = mediator_active ? m_high : Real(0.0);
+    CacheKey key{qname, k_low, k_high, m_low_key, m_high_key};
     auto it = cache.find(key);
     if (it != cache.end()) return it->second;
     ShellWorkspace ws = ws_template;
     ws.k_low = k_low;
     ws.k_high = k_high;
+    ws.mediator_active = mediator_active;
+    ws.m_low = m_low;
+    ws.m_high = m_high;
     auto result = quantity_table.at(qname).fn(ws);
     cache.emplace(key, result);
     return result;
@@ -275,23 +311,28 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
 
   for (auto &tr : cfg.terms) {
     const auto &term = term_table.at(tr.name);
-    const bool q_resolved =
-        tr.mode == DecompositionMode::Full || tr.mode == DecompositionMode::BySender;
-    const bool k_resolved =
-        tr.mode == DecompositionMode::Full || tr.mode == DecompositionMode::ByReceiver;
+    const bool q_resolved = tr.mode.donor_resolved;
+    const bool k_resolved = tr.mode.receiver_resolved;
+    const bool m_resolved = tr.mode.mediator_resolved;
     const int n_q = q_resolved ? n_shells : 1;
     const int n_k = k_resolved ? n_shells : 1;
+    const int n_m = m_resolved ? n_shells : 1;
 
-    parthenon::HostArray2D<TransferReal> matrix(tr.name, n_q, n_k);
+    parthenon::HostArray3D<TransferReal> matrix(tr.name, n_q, n_m, n_k);
     for (int qi = 0; qi < n_q; qi++) {
       const Real q_low = q_resolved ? shell_edges[qi] : collapsed_k_low;
       const Real q_high = q_resolved ? shell_edges[qi + 1] : collapsed_k_high;
-      auto q_side = evaluate(term.q_side_quantity, q_low, q_high);
-      for (int ki = 0; ki < n_k; ki++) {
-        const Real k_low = k_resolved ? shell_edges[ki] : collapsed_k_low;
-        const Real k_high = k_resolved ? shell_edges[ki + 1] : collapsed_k_high;
-        auto k_side = evaluate(term.k_side_quantity, k_low, k_high);
-        matrix(qi, ki) = term.prefactor * DotProductReduce(k_side, q_side, 3 * fft_size_inbox);
+      for (int mi = 0; mi < n_m; mi++) {
+        const Real m_low = m_resolved ? shell_edges[mi] : collapsed_k_low;
+        const Real m_high = m_resolved ? shell_edges[mi + 1] : collapsed_k_high;
+        auto q_side = evaluate(term.q_side_quantity, q_low, q_high, m_resolved, m_low, m_high);
+        for (int ki = 0; ki < n_k; ki++) {
+          const Real k_low = k_resolved ? shell_edges[ki] : collapsed_k_low;
+          const Real k_high = k_resolved ? shell_edges[ki + 1] : collapsed_k_high;
+          auto k_side = evaluate(term.k_side_quantity, k_low, k_high, m_resolved, m_low, m_high);
+          matrix(qi, mi, ki) =
+              term.prefactor * DotProductReduce(k_side, q_side, 3 * fft_size_inbox);
+        }
       }
     }
     result.matrices.emplace(tr.name, matrix);
@@ -375,13 +416,22 @@ TransferResult ComputeShellTransferFromFile(parthenon::Mesh *pmesh,
 
 namespace {
 
+// Named tokens covering all 2^3 donor/mediator/receiver resolved-vs-
+// collapsed combinations. The four non-"_mediator" names are the legacy
+// tokens (mediator always collapsed, matching behavior before mediator
+// decomposition existed); the "_mediator"/"mediator_only" names add the new
+// mediator axis.
 DecompositionMode ParseDecompositionMode(const std::string &s) {
-  if (s == "full") return DecompositionMode::Full;
-  if (s == "by_sender") return DecompositionMode::BySender;
-  if (s == "by_receiver") return DecompositionMode::ByReceiver;
-  if (s == "total") return DecompositionMode::Total;
+  if (s == "full") return DecompositionMode::Full();
+  if (s == "by_sender") return DecompositionMode::BySender();
+  if (s == "by_receiver") return DecompositionMode::ByReceiver();
+  if (s == "total") return DecompositionMode::Total();
+  if (s == "full_mediator") return DecompositionMode::FullWithMediator();
+  if (s == "by_sender_mediator") return DecompositionMode::BySenderWithMediator();
+  if (s == "by_receiver_mediator") return DecompositionMode::ByReceiverWithMediator();
+  if (s == "mediator_only") return DecompositionMode::MediatorOnly();
   PARTHENON_FAIL("energy_transfer: unknown decomposition mode '" + s + "'");
-  return DecompositionMode::Full;
+  return DecompositionMode::Full();
 }
 
 std::vector<std::string> SplitCommaList(const std::string &s) {
@@ -425,7 +475,7 @@ ShellTransferConfig ShellTransferConfig::FromInput(parthenon::ParameterInput *pi
   for (const auto &token : SplitCommaList(terms_str)) {
     const auto colon = token.find(':');
     if (colon == std::string::npos) {
-      cfg.terms.emplace_back(token, DecompositionMode::Full);
+      cfg.terms.emplace_back(token, DecompositionMode::Full());
     } else {
       cfg.terms.emplace_back(token.substr(0, colon),
                              ParseDecompositionMode(token.substr(colon + 1)));

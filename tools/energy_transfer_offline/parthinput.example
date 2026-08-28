@@ -106,7 +106,9 @@ shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0
 # --- Terms ---
 # NOTE: there's no more one-boolean-per-term switch (compute_UU, compute_BB,
 # ...). Request terms by name instead, comma-separated, optionally with a
-# ":mode" suffix (full/by_sender/by_receiver/total) -- see docs/README.md.
+# ":mode" suffix (full/by_sender/by_receiver/total, or the
+# .../*_mediator/mediator_only variants that also shell-decompose the
+# mediating field) -- see docs/README.md.
 # The old compute_UU/compute_BB/compute_UBTb flags each gated more than one
 # matrix, so they expand to multiple names below:
 #   compute_UU=true    -> UUA,UUC

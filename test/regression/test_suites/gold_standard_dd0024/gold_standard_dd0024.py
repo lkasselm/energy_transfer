@@ -92,10 +92,12 @@ class TestCase(utils.test_case.TestCaseAbs):
         per_term_max_abs = {}
         per_term_max_rel = {}
         for term in TERMS:
-            # On-disk shape is (K, Q) -- row=receiver shell, col=donor shell -- which
-            # is deliberately the same convention as gold[...][KBin][QBin] (that's the
-            # whole reason WriteResult transposes at the I/O boundary), so no reordering
-            # is needed here.
+            # On-disk shape is (K, M, Q) -- row=receiver shell, mediator shell
+            # (always size 1 here since dd0024.in doesn't request mediator
+            # decomposition), col=donor shell. The (K, Q) axes are deliberately
+            # the same convention as gold[...][KBin][QBin] (that's the whole
+            # reason WriteResult transposes at the I/O boundary), so no
+            # reordering is needed beyond squeezing out the mediator axis.
             matrix = cpp[term]
             gold_term = gold["WW"][term]["AnyToAny"]
             max_abs = 0.0
@@ -103,7 +105,7 @@ class TestCase(utils.test_case.TestCaseAbs):
             for ki, kbin in enumerate(labels):
                 for qi, qbin in enumerate(labels):
                     gold_val = gold_term[kbin][qbin]
-                    cpp_val = matrix[ki, qi]
+                    cpp_val = matrix[ki, 0, qi]
                     absdiff = abs(cpp_val - gold_val)
                     reldiff = absdiff / (abs(gold_val) if gold_val != 0 else 1.0)
                     max_abs = max(max_abs, absdiff)
@@ -123,7 +125,7 @@ class TestCase(utils.test_case.TestCaseAbs):
             bonus_max_abs = 0.0
             for ki, kbin in enumerate(labels):
                 for qi, qbin in enumerate(labels):
-                    bonus_max_abs = max(bonus_max_abs, abs(summed[ki, qi] - gold_term[kbin][qbin]))
+                    bonus_max_abs = max(bonus_max_abs, abs(summed[ki, 0, qi] - gold_term[kbin][qbin]))
             print(f"[bonus] {sum_name} = {'+'.join(parts)} vs gold: max abs diff = {bonus_max_abs:.3e}")
 
         print("\nPer-term max |diff| (informational, printed even on success -- watch this "

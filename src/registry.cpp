@@ -21,6 +21,44 @@ void ZeroVec(parthenon::ParArray1D<Real> &v, std::size_t n3) {
 
 Real UnrestrictedKHigh(const ShellWorkspace &ws) { return Real(ws.Nx + ws.Ny + ws.Nz); }
 
+// ---- Mediator shell-filtering helpers ---------------------------------
+//
+// Both return field_full completely unchanged whenever ws.mediator_active is
+// false (the common case) -- no extra FFT/filter work happens, preserving
+// the same cost as before mediator decomposition existed.
+
+// Vector (3-component) mediator with an already-computed full-domain FT
+// (FT_U/FT_B/FT_b) -- shell-filters it to (ws.m_low, ws.m_high).
+parthenon::ParArray1D<Real>
+FilterMediatorVector(const ShellWorkspace &ws, const char *name,
+                     const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_field_full,
+                     const parthenon::ParArray1D<Real> &field_full) {
+  if (!ws.mediator_active) return field_full;
+  auto out = AllocVec(name, ws.fft_size_inbox);
+  parthenon::ParArray1D<Kokkos::complex<Real>> scratch(std::string(name) + "_med_scratch",
+                                                        3 * ws.fft_size_outbox);
+  ShellFilter(ws.fft_mgr, 3, FT_field_full, scratch, out, ws.m_low, ws.m_high);
+  return out;
+}
+
+// Scalar mediator with no persistent FT array (div(U), div(b)) -- forward-
+// transforms field_full once, then shell-filters, mirroring the inline
+// Forward()-then-ShellFilter idiom already used by DivbW/GradBdotBQScaled
+// for their own (non-mediator) on-the-fly spectral work.
+parthenon::ParArray1D<Real> FilterMediatorScalar(const ShellWorkspace &ws, const char *name,
+                                                 const parthenon::ParArray1D<Real> &field_full) {
+  if (!ws.mediator_active) return field_full;
+  const auto n = ws.fft_size_inbox;
+  const auto nout = ws.fft_size_outbox;
+  parthenon::ParArray1D<Kokkos::complex<Real>> FT_scratch(std::string(name) + "_med_FT", nout);
+  ws.fft_mgr->Forward(field_full.data(), FT_scratch.data());
+  parthenon::ParArray1D<Real> out(name, n);
+  parthenon::ParArray1D<Kokkos::complex<Real>> filter_scratch(std::string(name) + "_med_scratch",
+                                                               nout);
+  ShellFilter(ws.fft_mgr, 1, FT_scratch, filter_scratch, out, ws.m_low, ws.m_high);
+  return out;
+}
+
 // ---- Level 1: derived-quantity providers -----------------------------
 
 parthenon::ParArray1D<Real> WFilter(const ShellWorkspace &ws) {
@@ -60,7 +98,7 @@ parthenon::ParArray1D<Real> UdotGradW(const ShellWorkspace &ws) {
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("UdotGradW_scratch", ws.fft_size_outbox);
   parthenon::ParArray1D<Real> deriv("UdotGradW_deriv", n);
-  auto vel = ws.fields->mom_or_vel;
+  auto vel = FilterMediatorVector(ws, "UdotGradW_U_med", ws.ft->FT_U, ws.fields->mom_or_vel);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_W, comp_i * ws.fft_size_outbox, scratch, 0,
@@ -82,7 +120,7 @@ parthenon::ParArray1D<Real> UdotGradB(const ShellWorkspace &ws) {
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("UdotGradB_scratch", ws.fft_size_outbox);
   parthenon::ParArray1D<Real> deriv("UdotGradB_deriv", n);
-  auto vel = ws.fields->mom_or_vel;
+  auto vel = FilterMediatorVector(ws, "UdotGradB_U_med", ws.ft->FT_U, ws.fields->mom_or_vel);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_B, comp_i * ws.fft_size_outbox, scratch, 0,
@@ -104,7 +142,7 @@ parthenon::ParArray1D<Real> BDotGradB(const ShellWorkspace &ws) {
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("bDotGradB_scratch", ws.fft_size_outbox);
   parthenon::ParArray1D<Real> deriv("bDotGradB_deriv", n);
-  auto b = ws.aux->b_flat;
+  auto b = FilterMediatorVector(ws, "BDotGradB_b_med", ws.ft->FT_b, ws.aux->b_flat);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_B, comp_i * ws.fft_size_outbox, scratch, 0,
@@ -126,7 +164,7 @@ parthenon::ParArray1D<Real> BDotGradW(const ShellWorkspace &ws) {
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("bDotGradW_scratch", ws.fft_size_outbox);
   parthenon::ParArray1D<Real> deriv("bDotGradW_deriv", n);
-  auto b = ws.aux->b_flat;
+  auto b = FilterMediatorVector(ws, "BDotGradW_b_med", ws.ft->FT_b, ws.aux->b_flat);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_W, comp_i * ws.fft_size_outbox, scratch, 0,
@@ -145,7 +183,7 @@ parthenon::ParArray1D<Real> BDotGradW(const ShellWorkspace &ws) {
 parthenon::ParArray1D<Real> WTimesDivU(const ShellWorkspace &ws) {
   auto w = WFilter(ws);
   const auto n = ws.fft_size_inbox;
-  auto divu = ws.aux->DivU;
+  auto divu = FilterMediatorScalar(ws, "WTimesDivU_DivU_med", ws.aux->DivU);
   auto out = AllocVec("W_times_DivU", n);
   parthenon::par_for(
       "WTimesDivU", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -158,7 +196,7 @@ parthenon::ParArray1D<Real> WTimesDivU(const ShellWorkspace &ws) {
 parthenon::ParArray1D<Real> BTimesDivU(const ShellWorkspace &ws) {
   auto b = BFilter(ws);
   const auto n = ws.fft_size_inbox;
-  auto divu = ws.aux->DivU;
+  auto divu = FilterMediatorScalar(ws, "BTimesDivU_DivU_med", ws.aux->DivU);
   auto out = AllocVec("B_times_DivU", n);
   parthenon::par_for(
       "BTimesDivU", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -171,7 +209,7 @@ parthenon::ParArray1D<Real> BTimesDivU(const ShellWorkspace &ws) {
 parthenon::ParArray1D<Real> WTimesDivb(const ShellWorkspace &ws) {
   auto w = WFilter(ws);
   const auto n = ws.fft_size_inbox;
-  auto divb = ws.aux->Divb;
+  auto divb = FilterMediatorScalar(ws, "WTimesDivb_Divb_med", ws.aux->Divb);
   auto out = AllocVec("W_times_Divb", n);
   parthenon::par_for(
       "WTimesDivb", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -189,7 +227,7 @@ parthenon::ParArray1D<Real> DivbW(const ShellWorkspace &ws) {
   const auto n = ws.fft_size_inbox;
   const auto nout = ws.fft_size_outbox;
   auto w = WFilter(ws);
-  auto b = ws.aux->b_flat;
+  auto b = FilterMediatorVector(ws, "DivbW_b_med", ws.ft->FT_b, ws.aux->b_flat);
   auto out = AllocVec("DivbW", n);
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Real> scalar_scratch("DivbW_scalar_scratch", n);
@@ -223,8 +261,8 @@ parthenon::ParArray1D<Real> GradBdotBQScaled(const ShellWorkspace &ws) {
   const auto n = ws.fft_size_inbox;
   const auto nout = ws.fft_size_outbox;
   auto bq = BFilter(ws);
-  auto mag = ws.fields->mag;
-  auto rho = ws.fields->rho;
+  auto mag = FilterMediatorVector(ws, "GradBdotBQ_B_med", ws.ft->FT_B, ws.fields->mag);
+  auto rho = ws.fields->rho; // scalar normalization, not a decomposable mediator
   parthenon::ParArray1D<Real> scalar_scratch("GradBdotBQ_scalar", n);
   parthenon::par_for(
       "BdotBQ", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -252,7 +290,7 @@ parthenon::ParArray1D<Real> GradBdotBQScaled(const ShellWorkspace &ws) {
 parthenon::ParArray1D<Real> BTimesMag(const ShellWorkspace &ws) {
   auto b = BFilter(ws);
   const auto n = ws.fft_size_inbox;
-  auto mag = ws.fields->mag;
+  auto mag = FilterMediatorVector(ws, "BTimesMag_B_med", ws.ft->FT_B, ws.fields->mag);
   auto out = AllocVec("B_times_mag", n);
   parthenon::par_for(
       "BTimesMag", std::size_t(0), 3 * n - 1,
@@ -335,21 +373,30 @@ parthenon::HostArray2D<TransferReal> SpecB(parthenon::Mesh *pm, const FlatFields
 
 const std::map<std::string, DerivedQuantity> &BuiltinQuantities() {
   static const std::map<std::string, DerivedQuantity> table = {
-      {"W_filter", {{}, &WFilter}},
-      {"B_filter", {{"B"}, &BFilter}},
-      {"Acc_filter_times_sqrt_rho", {{"Acc"}, &AccFilterTimesSqrtRho}},
-      {"U_dot_grad_W", {{}, &UdotGradW}},
-      {"U_dot_grad_B", {{"B"}, &UdotGradB}},
-      {"b_dot_grad_B", {{"B", "b"}, &BDotGradB}},
-      {"b_dot_grad_W", {{"b"}, &BDotGradW}},
-      {"W_times_DivU", {{"U", "DivU"}, &WTimesDivU}},
-      {"B_times_DivU", {{"B", "U", "DivU"}, &BTimesDivU}},
-      {"W_times_Divb", {{"b", "Divb"}, &WTimesDivb}},
-      {"Div_bW", {{"b"}, &DivbW}},
-      {"grad_BdotBQ_scaled", {{"B"}, &GradBdotBQScaled}},
-      {"B_times_mag", {{"B"}, &BTimesMag}},
-      {"Div_WOverSqrtRho_broadcast", {{}, &DivWOverSqrtRhoBroadcast}},
-      {"grad_P_over_sqrt_rho", {{"P"}, &GradPOverSqrtRho}},
+      // Pure shell filters -- no mediator at all.
+      {"W_filter", {{}, {}, false, &WFilter}},
+      {"B_filter", {{"B"}, {}, false, &BFilter}},
+      // Mediator is rho (a scalar normalization, not decomposable).
+      {"Acc_filter_times_sqrt_rho", {{"Acc"}, {}, false, &AccFilterTimesSqrtRho}},
+      {"Div_WOverSqrtRho_broadcast", {{}, {}, false, &DivWOverSqrtRhoBroadcast}},
+      {"grad_P_over_sqrt_rho", {{"P"}, {}, false, &GradPOverSqrtRho}},
+      // Mediator is U -- doesn't otherwise need FT_U (donor field is FT_W),
+      // so it's only pulled in via mediator_only_base_fields.
+      {"U_dot_grad_W", {{}, {"U"}, true, &UdotGradW}},
+      {"U_dot_grad_B", {{"B"}, {"U"}, true, &UdotGradB}},
+      // Mediator is b -- FT_b is always computed alongside b_flat whenever
+      // "b" is required, so no extra mediator_only_base_fields tag needed.
+      {"b_dot_grad_B", {{"B", "b"}, {}, true, &BDotGradB}},
+      {"b_dot_grad_W", {{"b"}, {}, true, &BDotGradW}},
+      {"Div_bW", {{"b"}, {}, true, &DivbW}},
+      // Mediator is div(U)/div(b) -- DivU/Divb are already required, and the
+      // mediator filter forward-transforms them on the fly.
+      {"W_times_DivU", {{"U", "DivU"}, {}, true, &WTimesDivU}},
+      {"B_times_DivU", {{"B", "U", "DivU"}, {}, true, &BTimesDivU}},
+      {"W_times_Divb", {{"b", "Divb"}, {}, true, &WTimesDivb}},
+      // Mediator is B -- FT_B is already required, so no extra tag needed.
+      {"grad_BdotBQ_scaled", {{"B"}, {}, true, &GradBdotBQScaled}},
+      {"B_times_mag", {{"B"}, {}, true, &BTimesMag}},
   };
   return table;
 }

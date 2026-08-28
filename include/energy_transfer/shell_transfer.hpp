@@ -30,26 +30,43 @@ struct BinningSpec {
   }
 };
 
-// Resolution a requested term is computed at. "Q" is the donor/advecting
-// shell (outer loop), "K" the receiving shell (inner loop). Collapsing a
-// side evaluates that side's derived quantity once over the whole domain
-// (k_low=0, k_high=unrestricted) instead of once per real shell bin --
-// shells partition Fourier space, so this reconstructs the unfiltered field
-// directly rather than summing per-shell results after the fact.
-enum class DecompositionMode {
-  Full,       // [n_shells, n_shells]
-  BySender,   // [n_shells, 1]
-  ByReceiver, // [1, n_shells]
-  Total       // [1, 1]
+// Which shell axes of a requested term are resolved per-shell vs collapsed
+// to the whole domain. "Q" is the donor/advecting shell (outer loop), "K"
+// the receiving shell (inner loop), and "mediator" is the field each term's
+// derived quantity reads directly (e.g. the advecting velocity U in UUA, or
+// the tension field b in BUT) -- normally read full/unfiltered, but can
+// optionally be shell-restricted too, independently of donor/receiver.
+// Collapsing an axis evaluates that axis's derived quantity once over the
+// whole domain (k_low=0, k_high=unrestricted) instead of once per real shell
+// bin -- shells partition Fourier space, so this reconstructs the unfiltered
+// field directly rather than summing per-shell results after the fact.
+//
+// Not every term has a decomposable mediator: some terms' only mediator is
+// a scalar normalization (density, via sqrt(rho) scaling) rather than a
+// field being transported, and shell-restricting a scalar normalization
+// isn't physically meaningful -- requesting mediator_resolved=true for such
+// a term (currently PU and FU) throws. See src/registry.cpp's
+// DerivedQuantity::has_decomposable_mediator for the authoritative list.
+struct DecompositionMode {
+  bool donor_resolved = true;
+  bool mediator_resolved = false;
+  bool receiver_resolved = true;
+
+  static DecompositionMode Full() { return {true, false, true}; }
+  static DecompositionMode BySender() { return {true, false, false}; }
+  static DecompositionMode ByReceiver() { return {false, false, true}; }
+  static DecompositionMode Total() { return {false, false, false}; }
+  static DecompositionMode FullWithMediator() { return {true, true, true}; }
+  static DecompositionMode BySenderWithMediator() { return {true, true, false}; }
+  static DecompositionMode ByReceiverWithMediator() { return {false, true, true}; }
+  static DecompositionMode MediatorOnly() { return {false, true, false}; }
 };
 
 struct TermRequest {
   std::string name;
-  DecompositionMode mode = DecompositionMode::Full;
-  TermRequest(std::string n, DecompositionMode m = DecompositionMode::Full)
-      : name(std::move(n)), mode(m) {}
-  TermRequest(const char *n, DecompositionMode m = DecompositionMode::Full)
-      : name(n), mode(m) {}
+  DecompositionMode mode;
+  TermRequest(std::string n, DecompositionMode m = {}) : name(std::move(n)), mode(m) {}
+  TermRequest(const char *n, DecompositionMode m = {}) : name(n), mode(m) {}
 };
 
 struct ShellTransferConfig {
@@ -66,8 +83,11 @@ struct TransferResult {
   int n_shells = 0;
   BinningSpec binning;
   std::vector<Real> shell_edges;
-  std::map<std::string, parthenon::HostArray2D<TransferReal>> matrices; // keyed by term name
-  std::map<std::string, parthenon::HostArray2D<TransferReal>> spectra;  // keyed by spectrum name
+  // keyed by term name; dims (n_q, n_m, n_k) -- n_m is 1 unless the term's
+  // DecompositionMode::mediator_resolved was set, matching how n_q/n_k
+  // collapse to 1 for an unresolved donor/receiver side.
+  std::map<std::string, parthenon::HostArray3D<TransferReal>> matrices;
+  std::map<std::string, parthenon::HostArray2D<TransferReal>> spectra; // keyed by spectrum name
 };
 
 // Which real-space fields ingestion must load for the requested terms/

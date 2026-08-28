@@ -9,8 +9,9 @@
 
 namespace energy_transfer {
 
-// Writes every entry of result.matrices as an openPMD mesh record named
-// after its term (shape per its requested DecompositionMode), and every
+// Writes every entry of result.matrices as a 3D openPMD mesh record named
+// after its term (shape per its requested DecompositionMode -- the mediator
+// axis has extent 1 unless mediator_resolved was set), and every
 // entry of result.spectra as three records "<name>_pow_sum", "<name>_k_sum",
 // "<name>_count_sum" (matching parthenon::utils::fft::CalcSpectrum's
 // [num_bins, 3] layout -- "_" rather than "/" since ADIOS2 rejects "/" in

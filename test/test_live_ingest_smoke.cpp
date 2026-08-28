@@ -84,8 +84,10 @@ int main(int argc, char *argv[]) {
     if (has_uua) {
       const auto &m = res.matrices.at("UUA");
       for (int q = 0; q < static_cast<int>(m.extent(0)); q++) {
-        for (int k = 0; k < static_cast<int>(m.extent(1)); k++) {
-          if (!std::isfinite(m(q, k))) all_finite = false;
+        for (int mi = 0; mi < static_cast<int>(m.extent(1)); mi++) {
+          for (int k = 0; k < static_cast<int>(m.extent(2)); k++) {
+            if (!std::isfinite(m(q, mi, k))) all_finite = false;
+          }
         }
       }
     }

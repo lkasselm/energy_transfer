@@ -93,10 +93,35 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
 
 `UUA, UUC, BBA, BBC, BUT, UBTb, UBTbA, UBTbC, BUPbb, UBPbb, PU, FU` (see
 `docs/plan.md` for their physical meaning) plus spectra `spec_U, spec_rho,
-spec_W, spec_B`. Each term can be requested at one of four resolutions
-(`DecompositionMode::Full/BySender/ByReceiver/Total`) -- collapsing a side
-skips that side's per-shell loop entirely rather than summing a full matrix
-after the fact, so `Total` is O(1) in the number of shells, not O(n_shells^2).
+spec_W, spec_B`.
+
+`DecompositionMode{donor_resolved, mediator_resolved, receiver_resolved}` (a
+plain struct, with `TermRequest`'s default equal to `DecompositionMode::Full()`
+below) controls which of a term's three shell axes are resolved per-shell vs
+collapsed to the whole domain -- collapsing an axis skips that axis's
+per-shell loop entirely rather than summing a full matrix after the fact, so
+e.g. `Total()` is O(1) in the number of shells, not O(n_shells^2). "Donor"
+(Q) and "receiver" (K) are the fields shell-filtered on each side of a
+term's dot product; "mediator" is the field each side's derived quantity
+reads directly to relate them (e.g. the advecting velocity `U` in `UUA`, or
+the tension field `b` in `BUT`) -- normally read full/unfiltered, but can
+optionally be shell-restricted too. Static factories cover all eight
+combinations: `Full()`/`BySender()`/`ByReceiver()`/`Total()` (mediator
+always collapsed -- the only four that existed before mediator
+decomposition), and `FullWithMediator()`/`BySenderWithMediator()`/
+`ByReceiverWithMediator()`/`MediatorOnly()` (mediator also resolved). Not
+every term has a decomposable mediator -- some terms' only mediator is a
+scalar normalization (density, via `sqrt(rho)` scaling) rather than a field
+being transported, and requesting `mediator_resolved=true` for such a term
+(currently `PU` and `FU`) throws; see `has_decomposable_mediator` in
+`src/registry.cpp`'s `BuiltinQuantities()` for the authoritative list.
+`TransferResult::matrices` is always 3D, `(n_q, n_m, n_k)`, with `n_m == 1`
+whenever `mediator_resolved == false`.
+
+Input-file `terms=` mode suffixes: `full`, `by_sender`, `by_receiver`,
+`total` (legacy, unchanged) plus `full_mediator`, `by_sender_mediator`,
+`by_receiver_mediator`, `mediator_only` (mediator also resolved), e.g.
+`terms=UUA:full_mediator,BBA:total,BUT:by_receiver`.
 
 **Adding a new term is a source change, not a runtime registration**: add an
 entry to the fixed tables in `src/registry.cpp` (`BuiltinQuantities()` for a
@@ -215,7 +240,7 @@ your own code.
      energy_transfer::ShellTransferConfig cfg;
      cfg.binning = energy_transfer::BinningSpec::Log(20);
      cfg.terms = {"UUA", "UUC",
-                  {"BBA", energy_transfer::DecompositionMode::Total}};
+                  {"BBA", energy_transfer::DecompositionMode::Total()}};
 
      auto result = energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg);
      energy_transfer::WriteResult(result, "transfer", tm.ncycle);

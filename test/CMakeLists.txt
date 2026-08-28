@@ -6,4 +6,8 @@ add_executable(test_live_ingest_smoke test_live_ingest_smoke.cpp)
 target_link_libraries(test_live_ingest_smoke PRIVATE energy_transfer Parthenon::parthenon MPI::MPI_CXX)
 add_test(NAME live_ingest_smoke COMMAND test_live_ingest_smoke -i ${CMAKE_CURRENT_SOURCE_DIR}/synthetic.in)
 
+add_executable(test_mediator_decomposition_smoke test_mediator_decomposition_smoke.cpp)
+target_link_libraries(test_mediator_decomposition_smoke PRIVATE energy_transfer Parthenon::parthenon MPI::MPI_CXX)
+add_test(NAME mediator_decomposition_smoke COMMAND test_mediator_decomposition_smoke -i ${CMAKE_CURRENT_SOURCE_DIR}/synthetic.in)
+
 add_subdirectory(regression)
