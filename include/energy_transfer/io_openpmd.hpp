@@ -15,8 +15,9 @@ namespace energy_transfer {
 // entry of result.spectra as three records "<name>_pow_sum", "<name>_k_sum",
 // "<name>_count_sum" (matching parthenon::utils::fft::CalcSpectrum's
 // [num_bins, 3] layout -- "_" rather than "/" since ADIOS2 rejects "/" in
-// dataset names outright). shell_edges/n_shells/binning are written as
-// iteration attributes.
+// dataset names outright). Each of donor/mediator/receiver's own edges/
+// n_shells/binning (independent per axis, see ShellTransferConfig) are
+// written as iteration attributes, prefixed accordingly.
 void WriteResult(const TransferResult &result, const std::string &output_file,
                  int output_number, MPI_Comm comm = MPI_COMM_WORLD);
 

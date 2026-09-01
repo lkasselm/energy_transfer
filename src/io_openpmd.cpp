@@ -58,9 +58,15 @@ void WriteResult(const TransferResult &result, const std::string &output_file,
 
   auto it = series.iterations[static_cast<uint64_t>(output_number)];
   it.open();
-  it.setAttribute("shell_edges", result.shell_edges);
-  it.setAttribute("n_shells", result.n_shells);
-  it.setAttribute("binning", BinningTypeName(result.binning.type));
+  it.setAttribute("donor_shell_edges", result.donor_edges);
+  it.setAttribute("n_donor_shells", result.n_donor_shells);
+  it.setAttribute("donor_binning", BinningTypeName(result.donor_binning.type));
+  it.setAttribute("mediator_shell_edges", result.mediator_edges);
+  it.setAttribute("n_mediator_shells", result.n_mediator_shells);
+  it.setAttribute("mediator_binning", BinningTypeName(result.mediator_binning.type));
+  it.setAttribute("receiver_shell_edges", result.receiver_edges);
+  it.setAttribute("n_receiver_shells", result.n_receiver_shells);
+  it.setAttribute("receiver_binning", BinningTypeName(result.receiver_binning.type));
 
   int my_rank = 0;
   MPI_Comm_rank(comm, &my_rank);

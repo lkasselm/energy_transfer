@@ -74,7 +74,8 @@ int main(int argc, char *argv[]) {
     auto spec = energy_transfer::MakeAthenaPKPrimitiveLiveSpec(IDN, IV1, IV2, IV3, IPR,
                                                                 /*has_bfield=*/false);
     energy_transfer::ShellTransferConfig cfg;
-    cfg.binning = energy_transfer::BinningSpec::Linear(4);
+    cfg.donor_binning = cfg.mediator_binning = cfg.receiver_binning =
+        energy_transfer::BinningSpec::Linear(4);
     cfg.terms = {"UUA"};
 
     auto res = energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg);
@@ -93,9 +94,9 @@ int main(int argc, char *argv[]) {
     }
 
     if (parthenon::Globals::my_rank == 0) {
-      if (has_uua && all_finite && res.n_shells == 4) {
-        std::cout << "PASS: ComputeShellTransferLive produced a finite " << res.n_shells
-                  << "x" << res.n_shells << " UUA matrix.\n";
+      if (has_uua && all_finite && res.n_donor_shells == 4 && res.n_receiver_shells == 4) {
+        std::cout << "PASS: ComputeShellTransferLive produced a finite " << res.n_donor_shells
+                  << "x" << res.n_receiver_shells << " UUA matrix.\n";
       } else {
         std::cout << "FAIL: ComputeShellTransferLive result missing/non-finite/wrong shape.\n";
         result = 1;

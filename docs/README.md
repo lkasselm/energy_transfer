@@ -74,10 +74,13 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
   values, or `MakeSeparateFieldsLiveSpec` for the historical rho/vel/mag/
   acc/pres layout.
 - `shell_transfer.hpp` -- the main entry points:
-  - `ShellTransferConfig` -- `binning` (`BinningSpec::Linear/Log/Custom`)
-    and `terms` (a list of `TermRequest{name, DecompositionMode}`, names
-    selected from the library's fixed built-in set -- see below) and
-    `spectrum_names`.
+  - `ShellTransferConfig` -- `donor_binning`/`mediator_binning`/
+    `receiver_binning` (each an independent `BinningSpec::Linear/Log/Custom`
+    -- e.g. a narrow custom band pinning donor and receiver to two specific
+    scales while mediator sweeps a fine `Log()` binning across whichever
+    scales mediate that pair's transfer) and `terms` (a list of
+    `TermRequest{name, DecompositionMode}`, names selected from the
+    library's fixed built-in set -- see below) and `spectrum_names`.
   - `ComputeShellTransferLive(Mesh*, MeshData<Real>*, LiveFieldSpec, ShellTransferConfig)`
   - `ComputeShellTransferFromFile(Mesh*, input_file, FileFieldNaming, ShellTransferConfig)`
     -- dispatches to the ADIOS2 or Parthenon HDF5 reader based on
@@ -122,6 +125,21 @@ Input-file `terms=` mode suffixes: `full`, `by_sender`, `by_receiver`,
 `total` (legacy, unchanged) plus `full_mediator`, `by_sender_mediator`,
 `by_receiver_mediator`, `mediator_only` (mediator also resolved), e.g.
 `terms=UUA:full_mediator,BBA:total,BUT:by_receiver`.
+
+`binning=`/`num_shells=`/`shell_edges=` (unprefixed, unchanged) set a
+default binning shared by donor/mediator/receiver, exactly as before
+per-axis binning existed. `donor_binning=`/`mediator_binning=`/
+`receiver_binning=` (each with its own `_num_shells=`/`_shell_edges=`)
+override just that one axis, e.g. to pin donor and receiver at two narrow
+custom bands while mediator sweeps a fine `log` binning:
+```
+donor_binning = custom
+donor_shell_edges = 18,28
+mediator_binning = log
+mediator_num_shells = 20
+receiver_binning = custom
+receiver_shell_edges = 8,12
+```
 
 **Adding a new term is a source change, not a runtime registration**: add an
 entry to the fixed tables in `src/registry.cpp` (`BuiltinQuantities()` for a
@@ -238,7 +256,8 @@ your own code.
          IDN, IV1, IV2, IV3, IPR, /*has_bfield=*/true, IB1, IB2, IB3);
 
      energy_transfer::ShellTransferConfig cfg;
-     cfg.binning = energy_transfer::BinningSpec::Log(20);
+     cfg.donor_binning = cfg.mediator_binning = cfg.receiver_binning =
+         energy_transfer::BinningSpec::Log(20);
      cfg.terms = {"UUA", "UUC",
                   {"BBA", energy_transfer::DecompositionMode::Total()}};
 

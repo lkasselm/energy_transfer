@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <map>
 #include <set>
 #include <sstream>
 #include <string>
 #include <tuple>
 
+#include <globals.hpp>
 #include <kokkos_abstraction.hpp>
 #include <utils/error_checking.hpp>
 
@@ -129,10 +131,18 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   const Real Lx = mesh_size.xmax(parthenon::X1DIR) - mesh_size.xmin(parthenon::X1DIR);
   const Real two_pi_over_L = 2.0 * M_PI / Lx;
 
-  const auto shell_edges = BuildShellEdges(cfg.binning, Nx);
-  const int n_shells = static_cast<int>(shell_edges.size()) - 1;
-  const Real collapsed_k_low = shell_edges.front();
-  const Real collapsed_k_high = shell_edges.back();
+  const auto donor_edges = BuildShellEdges(cfg.donor_binning, Nx);
+  const auto mediator_edges = BuildShellEdges(cfg.mediator_binning, Nx);
+  const auto receiver_edges = BuildShellEdges(cfg.receiver_binning, Nx);
+  const int n_donor_shells = static_cast<int>(donor_edges.size()) - 1;
+  const int n_mediator_shells = static_cast<int>(mediator_edges.size()) - 1;
+  const int n_receiver_shells = static_cast<int>(receiver_edges.size()) - 1;
+  const Real collapsed_donor_low = donor_edges.front();
+  const Real collapsed_donor_high = donor_edges.back();
+  const Real collapsed_mediator_low = mediator_edges.front();
+  const Real collapsed_mediator_high = mediator_edges.back();
+  const Real collapsed_receiver_low = receiver_edges.front();
+  const Real collapsed_receiver_high = receiver_edges.back();
 
   const auto qnames = QuantityNamesForTerms(cfg.terms);
   const auto tags = BaseFieldClosure(qnames);
@@ -305,35 +315,58 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   };
 
   TransferResult result;
-  result.n_shells = n_shells;
-  result.binning = cfg.binning;
-  result.shell_edges = shell_edges;
+  result.n_donor_shells = n_donor_shells;
+  result.n_mediator_shells = n_mediator_shells;
+  result.n_receiver_shells = n_receiver_shells;
+  result.donor_binning = cfg.donor_binning;
+  result.mediator_binning = cfg.mediator_binning;
+  result.receiver_binning = cfg.receiver_binning;
+  result.donor_edges = donor_edges;
+  result.mediator_edges = mediator_edges;
+  result.receiver_edges = receiver_edges;
 
+  const bool report_progress = parthenon::Globals::my_rank == 0;
   for (auto &tr : cfg.terms) {
     const auto &term = term_table.at(tr.name);
     const bool q_resolved = tr.mode.donor_resolved;
     const bool k_resolved = tr.mode.receiver_resolved;
     const bool m_resolved = tr.mode.mediator_resolved;
-    const int n_q = q_resolved ? n_shells : 1;
-    const int n_k = k_resolved ? n_shells : 1;
-    const int n_m = m_resolved ? n_shells : 1;
+    const int n_q = q_resolved ? n_donor_shells : 1;
+    const int n_k = k_resolved ? n_receiver_shells : 1;
+    const int n_m = m_resolved ? n_mediator_shells : 1;
+
+    if (report_progress) {
+      std::cout << "energy_transfer: term '" << tr.name << "' -- " << n_q << " donor x " << n_m
+                << " mediator x " << n_k << " receiver shells (" << (n_q * n_m * n_k)
+                << " entries)" << std::endl;
+    }
 
     parthenon::HostArray3D<TransferReal> matrix(tr.name, n_q, n_m, n_k);
     for (int qi = 0; qi < n_q; qi++) {
-      const Real q_low = q_resolved ? shell_edges[qi] : collapsed_k_low;
-      const Real q_high = q_resolved ? shell_edges[qi + 1] : collapsed_k_high;
+      const Real q_low = q_resolved ? donor_edges[qi] : collapsed_donor_low;
+      const Real q_high = q_resolved ? donor_edges[qi + 1] : collapsed_donor_high;
       for (int mi = 0; mi < n_m; mi++) {
-        const Real m_low = m_resolved ? shell_edges[mi] : collapsed_k_low;
-        const Real m_high = m_resolved ? shell_edges[mi + 1] : collapsed_k_high;
+        const Real m_low = m_resolved ? mediator_edges[mi] : collapsed_mediator_low;
+        const Real m_high = m_resolved ? mediator_edges[mi + 1] : collapsed_mediator_high;
+        if (report_progress) {
+          std::cout << "energy_transfer: term '" << tr.name << "' donor shell " << (qi + 1)
+                    << "/" << n_q << " (k in (" << q_low << ", " << q_high
+                    << "]), mediator shell " << (mi + 1) << "/" << n_m << " (k in (" << m_low
+                    << ", " << m_high << "]) -- sweeping " << n_k << " receiver shell(s)"
+                    << std::endl;
+        }
         auto q_side = evaluate(term.q_side_quantity, q_low, q_high, m_resolved, m_low, m_high);
         for (int ki = 0; ki < n_k; ki++) {
-          const Real k_low = k_resolved ? shell_edges[ki] : collapsed_k_low;
-          const Real k_high = k_resolved ? shell_edges[ki + 1] : collapsed_k_high;
+          const Real k_low = k_resolved ? receiver_edges[ki] : collapsed_receiver_low;
+          const Real k_high = k_resolved ? receiver_edges[ki + 1] : collapsed_receiver_high;
           auto k_side = evaluate(term.k_side_quantity, k_low, k_high, m_resolved, m_low, m_high);
           matrix(qi, mi, ki) =
               term.prefactor * DotProductReduce(k_side, q_side, 3 * fft_size_inbox);
         }
       }
+    }
+    if (report_progress) {
+      std::cout << "energy_transfer: term '" << tr.name << "' done." << std::endl;
     }
     result.matrices.emplace(tr.name, matrix);
   }
@@ -444,32 +477,56 @@ std::vector<std::string> SplitCommaList(const std::string &s) {
   return out;
 }
 
-} // namespace
-
-ShellTransferConfig ShellTransferConfig::FromInput(parthenon::ParameterInput *pin) {
-  ShellTransferConfig cfg;
-
-  const auto binning_str = pin->GetOrAddString("energy_transfer", "binning", "lin");
-  const auto num_shells = pin->GetOrAddInteger("energy_transfer", "num_shells", 20);
-  if (binning_str == "lin") {
-    cfg.binning = BinningSpec::Linear(num_shells);
-  } else if (binning_str == "log") {
-    cfg.binning = BinningSpec::Log(num_shells);
-  } else if (binning_str == "custom") {
-    const auto edges_str = pin->GetOrAddString("energy_transfer", "shell_edges", "");
+BinningSpec ParseBinningSpecFromKeys(parthenon::ParameterInput *pin,
+                                     const std::string &binning_key,
+                                     const std::string &num_shells_key,
+                                     const std::string &shell_edges_key) {
+  const auto binning_str = pin->GetOrAddString("energy_transfer", binning_key, "lin");
+  const auto num_shells = pin->GetOrAddInteger("energy_transfer", num_shells_key, 20);
+  if (binning_str == "lin") return BinningSpec::Linear(num_shells);
+  if (binning_str == "log") return BinningSpec::Log(num_shells);
+  if (binning_str == "custom") {
+    const auto edges_str = pin->GetOrAddString("energy_transfer", shell_edges_key, "");
     std::vector<Real> edges;
     for (const auto &token : SplitCommaList(edges_str)) {
       edges.push_back(static_cast<Real>(std::stod(token)));
     }
     PARTHENON_REQUIRE_THROWS(edges.size() >= 2,
-                             "energy_transfer/binning=custom requires "
-                             "energy_transfer/shell_edges to list at least 2 "
-                             "comma-separated bin-edge values, e.g. "
-                             "shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0");
-    cfg.binning = BinningSpec::Custom(std::move(edges));
-  } else {
-    PARTHENON_FAIL("energy_transfer/binning must be 'lin', 'log', or 'custom'");
+                             "energy_transfer/" + binning_key +
+                                 "=custom requires energy_transfer/" + shell_edges_key +
+                                 " to list at least 2 comma-separated bin-edge values, e.g. " +
+                                 shell_edges_key + " = 0.5,1.5,2.5,16.0,26.5,28.5,32.0");
+    return BinningSpec::Custom(std::move(edges));
   }
+  PARTHENON_FAIL(("energy_transfer/" + binning_key + " must be 'lin', 'log', or 'custom'").c_str());
+  return BinningSpec::Linear(num_shells);
+}
+
+} // namespace
+
+ShellTransferConfig ShellTransferConfig::FromInput(parthenon::ParameterInput *pin) {
+  ShellTransferConfig cfg;
+
+  // Shared default: binning=/num_shells=/shell_edges= (no prefix), used by
+  // any axis without its own explicit donor_/mediator_/receiver_ override --
+  // an input deck that only sets these keeps all three axes sharing one
+  // binning, exactly as before mediator decomposition existed.
+  const auto default_binning = ParseBinningSpecFromKeys(pin, "binning", "num_shells", "shell_edges");
+
+  cfg.donor_binning = pin->DoesParameterExist("energy_transfer", "donor_binning")
+                          ? ParseBinningSpecFromKeys(pin, "donor_binning", "donor_num_shells",
+                                                     "donor_shell_edges")
+                          : default_binning;
+  cfg.mediator_binning =
+      pin->DoesParameterExist("energy_transfer", "mediator_binning")
+          ? ParseBinningSpecFromKeys(pin, "mediator_binning", "mediator_num_shells",
+                                     "mediator_shell_edges")
+          : default_binning;
+  cfg.receiver_binning =
+      pin->DoesParameterExist("energy_transfer", "receiver_binning")
+          ? ParseBinningSpecFromKeys(pin, "receiver_binning", "receiver_num_shells",
+                                     "receiver_shell_edges")
+          : default_binning;
 
   const auto terms_str = pin->GetOrAddString("energy_transfer", "terms", "UUA,UUC");
   for (const auto &token : SplitCommaList(terms_str)) {

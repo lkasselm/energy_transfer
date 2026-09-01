@@ -70,19 +70,37 @@ struct TermRequest {
 };
 
 struct ShellTransferConfig {
-  BinningSpec binning = BinningSpec::Linear(20);
+  // Donor (Q), mediator, and receiver (K) each get their own independent
+  // binning -- e.g. a wide, coarse custom band for Q and K to pin them at
+  // two specific scales, while mediator uses fine Log() binning to sweep
+  // finely across whichever scales actually mediate that Q->K transfer.
+  // All three default to the same Linear(20) binning, matching this
+  // library's original single-binning behavior.
+  BinningSpec donor_binning = BinningSpec::Linear(20);
+  BinningSpec mediator_binning = BinningSpec::Linear(20);
+  BinningSpec receiver_binning = BinningSpec::Linear(20);
   std::vector<TermRequest> terms;          // names from the library's fixed built-in set (BuiltinTerms())
   std::vector<std::string> spectrum_names; // names from BuiltinSpectra()
 
-  // Reads an <energy_transfer> input block: binning=lin|log, num_shells=,
+  // Reads an <energy_transfer> input block: binning=lin|log|custom,
+  // num_shells=, shell_edges= set a default binning shared by all three
+  // axes; donor_binning=/mediator_binning=/receiver_binning= (each with its
+  // own _num_shells=/_shell_edges=) override just that one axis when
+  // present, falling back to the shared default otherwise. Also reads
   // terms=UUA,BBA:total,BUT:by_receiver,..., spectra=spec_U,spec_rho,...
   static ShellTransferConfig FromInput(parthenon::ParameterInput *pin);
 };
 
 struct TransferResult {
-  int n_shells = 0;
-  BinningSpec binning;
-  std::vector<Real> shell_edges;
+  int n_donor_shells = 0;
+  int n_mediator_shells = 0;
+  int n_receiver_shells = 0;
+  BinningSpec donor_binning;
+  BinningSpec mediator_binning;
+  BinningSpec receiver_binning;
+  std::vector<Real> donor_edges;
+  std::vector<Real> mediator_edges;
+  std::vector<Real> receiver_edges;
   // keyed by term name; dims (n_q, n_m, n_k) -- n_m is 1 unless the term's
   // DecompositionMode::mediator_resolved was set, matching how n_q/n_k
   // collapse to 1 for an unresolved donor/receiver side.
