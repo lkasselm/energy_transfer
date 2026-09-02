@@ -78,9 +78,10 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
     `receiver_binning` (each an independent `BinningSpec::Linear/Log/Custom`
     -- e.g. a narrow custom band pinning donor and receiver to two specific
     scales while mediator sweeps a fine `Log()` binning across whichever
-    scales mediate that pair's transfer) and `terms` (a list of
-    `TermRequest{name, DecompositionMode}`, names selected from the
-    library's fixed built-in set -- see below) and `spectrum_names`.
+    scales mediate that pair's transfer), `terms` (a plain list of names
+    selected from the library's fixed built-in set -- see below), `mode`
+    (one `DecompositionMode` shared by every term in `terms` -- not
+    per-term, see below), and `spectrum_names`.
   - `ComputeShellTransferLive(Mesh*, MeshData<Real>*, LiveFieldSpec, ShellTransferConfig)`
   - `ComputeShellTransferFromFile(Mesh*, input_file, FileFieldNaming, ShellTransferConfig)`
     -- dispatches to the ADIOS2 or Parthenon HDF5 reader based on
@@ -99,13 +100,23 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
 spec_W, spec_B`.
 
 `DecompositionMode{donor_resolved, mediator_resolved, receiver_resolved}` (a
-plain struct, with `TermRequest`'s default equal to `DecompositionMode::Full()`
-below) controls which of a term's three shell axes are resolved per-shell vs
-collapsed to the whole domain -- collapsing an axis skips that axis's
-per-shell loop entirely rather than summing a full matrix after the fact, so
-e.g. `Total()` is O(1) in the number of shells, not O(n_shells^2). "Donor"
-(Q) and "receiver" (K) are the fields shell-filtered on each side of a
-term's dot product; "mediator" is the field each side's derived quantity
+plain struct, `ShellTransferConfig::mode`'s default is `DecompositionMode::Full()`)
+controls which of the three shell axes are resolved per-shell vs collapsed
+to the whole domain -- collapsing an axis skips that axis's per-shell loop
+entirely rather than summing a full matrix after the fact, so e.g. `Total()`
+is O(1) in the number of shells, not O(n_shells^2). **`mode` applies to
+every term in `ShellTransferConfig::terms` -- it is not per-term.** This is
+deliberate: it lets `ComputeShellTransfer` share one `(Q,M,K)` shell sweep
+across all requested terms instead of a separate sweep per term, which is
+what keeps peak memory bounded to a small, fixed number of in-flight
+shell-filtered fields (the distinct quantity names any requested term
+actually needs, typically well under 10) regardless of shell count or term
+count -- an earlier per-term-mode version of this API let different terms in
+one call want different sweep shapes, which forced an unbounded whole-call
+cache and caused real OOMs on long sweeps.
+
+"Donor" (Q) and "receiver" (K) are the fields shell-filtered on each side of
+a term's dot product; "mediator" is the field each side's derived quantity
 reads directly to relate them (e.g. the advecting velocity `U` in `UUA`, or
 the tension field `b` in `BUT`) -- normally read full/unfiltered, but can
 optionally be shell-restricted too. Static factories cover all eight
@@ -115,16 +126,19 @@ decomposition), and `FullWithMediator()`/`BySenderWithMediator()`/
 `ByReceiverWithMediator()`/`MediatorOnly()` (mediator also resolved). Not
 every term has a decomposable mediator -- some terms' only mediator is a
 scalar normalization (density, via `sqrt(rho)` scaling) rather than a field
-being transported, and requesting `mediator_resolved=true` for such a term
-(currently `PU` and `FU`) throws; see `has_decomposable_mediator` in
-`src/registry.cpp`'s `BuiltinQuantities()` for the authoritative list.
-`TransferResult::matrices` is always 3D, `(n_q, n_m, n_k)`, with `n_m == 1`
-whenever `mediator_resolved == false`.
+being transported, and setting `mode.mediator_resolved=true` while `terms`
+includes such a term (currently `PU` and `FU`) throws immediately, for the
+whole call, before any computation starts; see `has_decomposable_mediator`
+in `src/registry.cpp`'s `BuiltinQuantities()` for the authoritative list.
+`TransferResult::matrices` is always 3D, `(n_q, n_m, n_k)` -- the same shape
+for every term, since `mode` is shared -- with `n_m == 1` whenever
+`mode.mediator_resolved == false`.
 
-Input-file `terms=` mode suffixes: `full`, `by_sender`, `by_receiver`,
-`total` (legacy, unchanged) plus `full_mediator`, `by_sender_mediator`,
-`by_receiver_mediator`, `mediator_only` (mediator also resolved), e.g.
-`terms=UUA:full_mediator,BBA:total,BUT:by_receiver`.
+Input-file keys: `terms=` is a plain comma-separated name list (no per-term
+suffix), e.g. `terms=UUA,BBA,BUT`; `mode=` sets the one `DecompositionMode`
+shared by all of them -- `full` (default), `by_sender`, `by_receiver`,
+`total`, or the mediator-resolving variants `full_mediator`,
+`by_sender_mediator`, `by_receiver_mediator`, `mediator_only`.
 
 `binning=`/`num_shells=`/`shell_edges=` (unprefixed, unchanged) set a
 default binning shared by donor/mediator/receiver, exactly as before
@@ -258,8 +272,7 @@ your own code.
      energy_transfer::ShellTransferConfig cfg;
      cfg.donor_binning = cfg.mediator_binning = cfg.receiver_binning =
          energy_transfer::BinningSpec::Log(20);
-     cfg.terms = {"UUA", "UUC",
-                  {"BBA", energy_transfer::DecompositionMode::Total()}};
+     cfg.terms = {"UUA", "UUC"}; // mode defaults to Full() -- shared by both terms
 
      auto result = energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg);
      energy_transfer::WriteResult(result, "transfer", tm.ncycle);

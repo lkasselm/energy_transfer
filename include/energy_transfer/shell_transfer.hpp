@@ -30,23 +30,36 @@ struct BinningSpec {
   }
 };
 
-// Which shell axes of a requested term are resolved per-shell vs collapsed
-// to the whole domain. "Q" is the donor/advecting shell (outer loop), "K"
-// the receiving shell (inner loop), and "mediator" is the field each term's
-// derived quantity reads directly (e.g. the advecting velocity U in UUA, or
-// the tension field b in BUT) -- normally read full/unfiltered, but can
-// optionally be shell-restricted too, independently of donor/receiver.
-// Collapsing an axis evaluates that axis's derived quantity once over the
-// whole domain (k_low=0, k_high=unrestricted) instead of once per real shell
-// bin -- shells partition Fourier space, so this reconstructs the unfiltered
-// field directly rather than summing per-shell results after the fact.
+// Which shell axes are resolved per-shell vs collapsed to the whole domain,
+// for EVERY term requested in a given ShellTransferConfig::terms (see
+// ShellTransferConfig::mode below -- this is deliberately a single global
+// setting, not per-term, so that ComputeShellTransfer can share one (Q,M,K)
+// shell sweep across all requested terms instead of a separate sweep per
+// term. That shared sweep is what keeps peak memory bounded to a small,
+// fixed number of in-flight shell-filtered fields, independent of shell
+// count or term count -- a per-term mode would let different terms want
+// different sweep shapes in the same call, which is exactly what forced an
+// earlier version of this code into an unbounded cache that grew for the
+// whole call and caused real OOMs on long sweeps).
+//
+// "Q" is the donor/advecting shell (outer loop), "K" the receiving shell
+// (inner loop), and "mediator" is the field each term's derived quantity
+// reads directly (e.g. the advecting velocity U in UUA, or the tension
+// field b in BUT) -- normally read full/unfiltered, but can optionally be
+// shell-restricted too, independently of donor/receiver. Collapsing an axis
+// evaluates that axis's derived quantity once over the whole domain
+// (k_low=0, k_high=unrestricted) instead of once per real shell bin --
+// shells partition Fourier space, so this reconstructs the unfiltered field
+// directly rather than summing per-shell results after the fact.
 //
 // Not every term has a decomposable mediator: some terms' only mediator is
 // a scalar normalization (density, via sqrt(rho) scaling) rather than a
 // field being transported, and shell-restricting a scalar normalization
-// isn't physically meaningful -- requesting mediator_resolved=true for such
-// a term (currently PU and FU) throws. See src/registry.cpp's
-// DerivedQuantity::has_decomposable_mediator for the authoritative list.
+// isn't physically meaningful -- requesting mode.mediator_resolved=true
+// while ShellTransferConfig::terms includes such a term (currently PU and
+// FU) throws immediately, for the whole call, before any computation
+// starts. See src/registry.cpp's DerivedQuantity::has_decomposable_mediator
+// for the authoritative list.
 struct DecompositionMode {
   bool donor_resolved = true;
   bool mediator_resolved = false;
@@ -62,13 +75,6 @@ struct DecompositionMode {
   static DecompositionMode MediatorOnly() { return {false, true, false}; }
 };
 
-struct TermRequest {
-  std::string name;
-  DecompositionMode mode;
-  TermRequest(std::string n, DecompositionMode m = {}) : name(std::move(n)), mode(m) {}
-  TermRequest(const char *n, DecompositionMode m = {}) : name(n), mode(m) {}
-};
-
 struct ShellTransferConfig {
   // Donor (Q), mediator, and receiver (K) each get their own independent
   // binning -- e.g. a wide, coarse custom band for Q and K to pin them at
@@ -79,15 +85,30 @@ struct ShellTransferConfig {
   BinningSpec donor_binning = BinningSpec::Linear(20);
   BinningSpec mediator_binning = BinningSpec::Linear(20);
   BinningSpec receiver_binning = BinningSpec::Linear(20);
-  std::vector<TermRequest> terms;          // names from the library's fixed built-in set (BuiltinTerms())
+  std::vector<std::string> terms; // names from the library's fixed built-in set (BuiltinTerms())
+  // ONE DecompositionMode shared by every term in `terms` above -- not
+  // per-term. This is what lets ComputeShellTransfer share a single (Q,M,K)
+  // shell sweep across all requested terms (see shell_transfer.cpp), which
+  // in turn is what keeps peak memory bounded to a small, fixed number of
+  // in-flight shell-filtered fields regardless of shell count or term count
+  // -- see the "why global, not per-term" note on DecompositionMode above.
+  // If mode.mediator_resolved is true and any requested term lacks a
+  // decomposable mediator (its mediator, if any, is a scalar normalization
+  // like rho -- currently PU and FU), the whole call throws immediately,
+  // before any computation starts.
+  DecompositionMode mode = DecompositionMode::Full();
   std::vector<std::string> spectrum_names; // names from BuiltinSpectra()
 
   // Reads an <energy_transfer> input block: binning=lin|log|custom,
   // num_shells=, shell_edges= set a default binning shared by all three
   // axes; donor_binning=/mediator_binning=/receiver_binning= (each with its
   // own _num_shells=/_shell_edges=) override just that one axis when
-  // present, falling back to the shared default otherwise. Also reads
-  // terms=UUA,BBA:total,BUT:by_receiver,..., spectra=spec_U,spec_rho,...
+  // present, falling back to the shared default otherwise. terms=UUA,BBA,BUT
+  // is a plain comma-separated name list (no per-term mode suffix); mode=
+  // (full/by_sender/by_receiver/total/full_mediator/by_sender_mediator/
+  // by_receiver_mediator/mediator_only, default full) sets the one
+  // DecompositionMode shared by all of them. Also reads
+  // spectra=spec_U,spec_rho,...
   static ShellTransferConfig FromInput(parthenon::ParameterInput *pin);
 };
 
@@ -101,9 +122,10 @@ struct TransferResult {
   std::vector<Real> donor_edges;
   std::vector<Real> mediator_edges;
   std::vector<Real> receiver_edges;
-  // keyed by term name; dims (n_q, n_m, n_k) -- n_m is 1 unless the term's
-  // DecompositionMode::mediator_resolved was set, matching how n_q/n_k
-  // collapse to 1 for an unresolved donor/receiver side.
+  // keyed by term name; dims (n_q, n_m, n_k) -- shared by every term, since
+  // ShellTransferConfig::mode is global (n_m is 1 unless mode.mediator_resolved
+  // was set, matching how n_q/n_k collapse to 1 for an unresolved donor/receiver
+  // side).
   std::map<std::string, parthenon::HostArray3D<TransferReal>> matrices;
   std::map<std::string, parthenon::HostArray2D<TransferReal>> spectra; // keyed by spectrum name
 };

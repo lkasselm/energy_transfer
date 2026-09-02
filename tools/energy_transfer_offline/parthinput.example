@@ -103,12 +103,26 @@ input_total_energy_mesh = cons_lvl0
 binning = custom
 shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0
 
+# donor/mediator/receiver now each take an independent binning -- the
+# unprefixed binning=/num_shells=/shell_edges= above still set the default
+# shared by all three, but donor_binning=/mediator_binning=/
+# receiver_binning= (each with its own _num_shells=/_shell_edges=) override
+# just that one axis when present. As above, each axis's own _num_shells=
+# is only used when that axis's binning is lin or log; it's ignored for
+# custom (the edge count decides). Uncomment to pin donor and receiver to
+# two narrow custom bands while mediator sweeps a fine log binning across
+# whichever scales actually mediate that donor->receiver transfer:
+# donor_binning = custom
+# donor_shell_edges = 18,28
+# mediator_binning = log
+# mediator_num_shells = 20
+# receiver_binning = custom
+# receiver_shell_edges = 8,12
+
 # --- Terms ---
 # NOTE: there's no more one-boolean-per-term switch (compute_UU, compute_BB,
-# ...). Request terms by name instead, comma-separated, optionally with a
-# ":mode" suffix (full/by_sender/by_receiver/total, or the
-# .../*_mediator/mediator_only variants that also shell-decompose the
-# mediating field) -- see docs/README.md.
+# ...). Request terms by name instead, comma-separated (no per-term mode --
+# see mode= below, which applies to every term listed here).
 # The old compute_UU/compute_BB/compute_UBTb flags each gated more than one
 # matrix, so they expand to multiple names below:
 #   compute_UU=true    -> UUA,UUC
@@ -120,6 +134,15 @@ shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0
 #   compute_PU=true    -> PU
 #   compute_FU=false   -> (omitted)
 terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU
+
+# One DecompositionMode shared by every term listed above (not per-term):
+# full/by_sender/by_receiver/total, or the .../*_mediator/mediator_only
+# variants that also shell-decompose the mediating field -- see
+# docs/README.md. Defaults to "full" if omitted. If mode is one of the
+# *_mediator/mediator_only variants, every term above must have a
+# decomposable mediator (PU and FU don't -- their mediator is a scalar rho
+# normalization) or the whole run fails immediately.
+# mode = full
 
 # --- Spectra ---
 spectra = spec_U,spec_rho,spec_W,spec_B

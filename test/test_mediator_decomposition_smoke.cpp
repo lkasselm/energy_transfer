@@ -82,13 +82,15 @@ int main(int argc, char *argv[]) {
     energy_transfer::ShellTransferConfig cfg_plain;
     cfg_plain.donor_binning = cfg_plain.mediator_binning = cfg_plain.receiver_binning =
         energy_transfer::BinningSpec::Linear(4);
-    cfg_plain.terms = {{"UUA", energy_transfer::DecompositionMode::Full()}};
+    cfg_plain.terms = {"UUA"};
+    cfg_plain.mode = energy_transfer::DecompositionMode::Full();
     auto res_plain = energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg_plain);
 
     energy_transfer::ShellTransferConfig cfg_mediator;
     cfg_mediator.donor_binning = cfg_mediator.mediator_binning = cfg_mediator.receiver_binning =
         energy_transfer::BinningSpec::Linear(4);
-    cfg_mediator.terms = {{"UUA", energy_transfer::DecompositionMode::FullWithMediator()}};
+    cfg_mediator.terms = {"UUA"};
+    cfg_mediator.mode = energy_transfer::DecompositionMode::FullWithMediator();
     auto res_mediator =
         energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg_mediator);
 
@@ -122,7 +124,8 @@ int main(int argc, char *argv[]) {
       energy_transfer::ShellTransferConfig cfg_pu;
       cfg_pu.donor_binning = cfg_pu.mediator_binning = cfg_pu.receiver_binning =
           energy_transfer::BinningSpec::Linear(4);
-      cfg_pu.terms = {{"PU", energy_transfer::DecompositionMode::FullWithMediator()}};
+      cfg_pu.terms = {"PU"};
+      cfg_pu.mode = energy_transfer::DecompositionMode::FullWithMediator();
       energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg_pu);
     } catch (const std::runtime_error &) {
       pu_rejected = true;
