@@ -145,6 +145,23 @@ terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU
 # mode = full
 
 # --- Spectra ---
+# spec_U/spec_rho/spec_W/spec_B are the plain power spectra of velocity,
+# density, W=sqrt(rho)*velocity, and the magnetic field. Each of the three
+# vector fields (U, W, B -- rho is scalar, not decomposable) also has a
+# directionally-decomposed bundle, requested via ONE name:
+# spec_U_decomp/spec_W_decomp/spec_B_decomp. Requesting e.g. spec_B_decomp
+# computes and writes FOUR spectra together -- spec_B, spec_B_compressive
+# (parallel to the wavevector k), spec_B_plus, spec_B_minus (the two
+# circularly-polarized "left/right-handed" parts perpendicular to k) -- in
+# one fused pass; the individual compressive/plus/minus names are not
+# separately requestable (there's rarely a reason to want just one, and
+# computing them together is what makes it cheap). At every bin,
+# spec_B_compressive+spec_B_plus+spec_B_minus == spec_B exactly
+# (Parseval/orthonormality of the projection basis) -- a useful sanity check
+# on your own analysis. See include/energy_transfer/decomposition.hpp for the
+# math and conventions (basis construction, the k=0/DC-mode convention). Not
+# yet available for the shell-to-shell transfer terms above, only for
+# spectra.
 spectra = spec_U,spec_rho,spec_W,spec_B
 
 gamma = 1.666667

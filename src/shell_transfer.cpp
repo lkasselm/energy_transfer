@@ -123,13 +123,17 @@ FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg) {
   req.acc = tags.count("Acc") > 0;
 
   const auto &spec_table = BuiltinSpectra();
+  const auto &bundle_table = BuiltinSpectrumBundles();
   for (auto &name : cfg.spectrum_names) {
-    PARTHENON_REQUIRE_THROWS(spec_table.count(name) > 0,
+    auto spec_it = spec_table.find(name);
+    if (spec_it != spec_table.end()) {
+      if (spec_it->second.needs_mag) req.mag = true;
+      continue;
+    }
+    auto bundle_it = bundle_table.find(name);
+    PARTHENON_REQUIRE_THROWS(bundle_it != bundle_table.end(),
                              "energy_transfer: unknown spectrum '" + name + "'");
-  }
-  if (std::find(cfg.spectrum_names.begin(), cfg.spectrum_names.end(), "spec_B") !=
-      cfg.spectrum_names.end()) {
-    req.mag = true;
+    if (bundle_it->second.needs_mag) req.mag = true;
   }
   return req;
 }
@@ -419,8 +423,16 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   }
 
   const auto &spectrum_table = BuiltinSpectra();
+  const auto &bundle_table = BuiltinSpectrumBundles();
   for (auto &name : cfg.spectrum_names) {
-    result.spectra.emplace(name, spectrum_table.at(name).fn(pmesh, fields, W_flat));
+    auto spec_it = spectrum_table.find(name);
+    if (spec_it != spectrum_table.end()) {
+      result.spectra.emplace(name, spec_it->second.fn(pmesh, fields, W_flat));
+      continue;
+    }
+    for (auto &[sub_name, arr] : bundle_table.at(name).fn(pmesh, fields, W_flat)) {
+      result.spectra.emplace(sub_name, arr);
+    }
   }
 
   return result;

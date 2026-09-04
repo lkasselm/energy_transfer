@@ -97,7 +97,31 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
 
 `UUA, UUC, BBA, BBC, BUT, UBTb, UBTbA, UBTbC, BUPbb, UBPbb, PU, FU` (see
 `docs/plan.md` for their physical meaning) plus spectra `spec_U, spec_rho,
-spec_W, spec_B`.
+spec_W, spec_B`, and a directionally-decomposed variant of each vector field
+requested via a single bundle name -- `spec_U_decomp`, `spec_W_decomp`,
+`spec_B_decomp` (`rho` is scalar, no direction to decompose against; `B`'s
+bundle pulls in the magnetic field the same way plain `spec_B` does).
+Requesting e.g. `spec_B_decomp` computes and writes **four** spectra
+together -- `spec_B`, `spec_B_compressive`, `spec_B_plus`, `spec_B_minus`
+(compressive = parallel to the wavevector `k`; plus/minus = the two
+circularly-polarized "helical" parts perpendicular to `k`) -- in one fused
+Forward()+mode-loop pass, since there's rarely a reason to want just one
+direction in isolation, and computing them separately would redundantly
+re-FFT the same field and redundantly recompute the same per-mode projection
+three times over (see `include/energy_transfer/decomposition.hpp` for the
+math, including why all three components -- plus/minus included -- are
+Hermitian-symmetric and could validly be reconstructed to real space with
+this library's existing r2c/c2r FFT if a future extension needs that; the
+current spectrum-only use never leaves Fourier space simply because a power
+spectrum never needs to, not as a workaround for anything). At every bin,
+`spec_B_compressive + spec_B_plus + spec_B_minus` reconstructs `spec_B`
+exactly (Parseval/orthonormality of the projection basis) -- including the
+`k=0` bin, via the convention that the whole DC mode is assigned to
+compressive and plus/minus are zero there, since direction is undefined at
+`k=0`. Input decks request a bundle the same way as any other spectrum:
+`spectra = spec_U,spec_B_decomp` (see
+`tools/energy_transfer_offline/parthinput.example`) -- the individual
+`spec_B_compressive` etc. names are not separately requestable.
 
 `DecompositionMode{donor_resolved, mediator_resolved, receiver_resolved}` (a
 plain struct, `ShellTransferConfig::mode`'s default is `DecompositionMode::Full()`)

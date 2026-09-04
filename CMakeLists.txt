@@ -98,6 +98,7 @@ endif()
 add_library(energy_transfer
   src/field_spec.cpp
   src/spectral_kernels.cpp
+  src/decomposition.cpp
   src/convert.cpp
   src/ingest_live.cpp
   src/ingest_adios2.cpp

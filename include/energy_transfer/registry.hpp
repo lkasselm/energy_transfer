@@ -98,11 +98,31 @@ using SpectrumFn = parthenon::HostArray2D<TransferReal> (*)(parthenon::Mesh *,
                                                             const parthenon::ParArray1D<Real> &W_flat);
 struct Spectrum {
   SpectrumFn fn;
+  bool needs_mag = false; // true for spectra computed from the magnetic field
 };
 
 const std::map<std::string, DerivedQuantity> &BuiltinQuantities();
 const std::map<std::string, TransferTerm> &BuiltinTerms();
 const std::map<std::string, Spectrum> &BuiltinSpectra();
+
+// A "bundle" spectrum name (e.g. "spec_U_decomp") computes several related
+// spectra in one fused pass -- one Forward() FFT and one loop over Fourier
+// modes producing the full, compressive, plus, and minus spectra of one
+// vector field together (see decomposition.hpp's CalcDecomposedSpectrumBundle)
+// -- rather than each as an independent BuiltinSpectra() entry, since
+// there's rarely a reason to request just one direction in isolation, and
+// computing them separately would redundantly re-FFT the same field and
+// redundantly recompute the same per-mode projection (ProjectMode already
+// yields all three directions at once). The returned map's keys are real
+// output names (e.g. "spec_U", "spec_U_compressive", "spec_U_plus",
+// "spec_U_minus") inserted directly into TransferResult::spectra.
+using SpectrumBundleFn = std::map<std::string, parthenon::HostArray2D<TransferReal>> (*)(
+    parthenon::Mesh *, const FlatFields &, const parthenon::ParArray1D<Real> &W_flat);
+struct SpectrumBundle {
+  SpectrumBundleFn fn;
+  bool needs_mag = false;
+};
+const std::map<std::string, SpectrumBundle> &BuiltinSpectrumBundles();
 
 // sum(a[idx] * b[idx]) over idx in [0, n), reduced across MPI ranks.
 TransferReal DotProductReduce(const parthenon::ParArray1D<Real> &a,
