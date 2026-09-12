@@ -11,7 +11,9 @@
 #include <parthenon_manager.hpp>
 #include <utils/error_checking.hpp>
 
+#include "energy_transfer/convert.hpp"
 #include "energy_transfer/field_spec.hpp"
+#include "energy_transfer/ingest.hpp"
 #include "energy_transfer/shell_transfer.hpp"
 
 using parthenon::Real;
@@ -78,21 +80,22 @@ int main(int argc, char *argv[]) {
     auto &md = pmesh->mesh_data.Get();
     auto spec = energy_transfer::MakeAthenaPKPrimitiveLiveSpec(IDN, IV1, IV2, IV3, IPR,
                                                                 /*has_bfield=*/false);
+    auto fields = energy_transfer::GatherLiveFields(pmesh, md.get(), spec);
+    energy_transfer::ConvertConservedToPrimitive(fields);
 
     energy_transfer::ShellTransferConfig cfg_plain;
     cfg_plain.donor_binning = cfg_plain.mediator_binning = cfg_plain.receiver_binning =
         energy_transfer::BinningSpec::Linear(4);
     cfg_plain.terms = {"UUA"};
     cfg_plain.mode = energy_transfer::DecompositionMode::Full();
-    auto res_plain = energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg_plain);
+    auto res_plain = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg_plain);
 
     energy_transfer::ShellTransferConfig cfg_mediator;
     cfg_mediator.donor_binning = cfg_mediator.mediator_binning = cfg_mediator.receiver_binning =
         energy_transfer::BinningSpec::Linear(4);
     cfg_mediator.terms = {"UUA"};
     cfg_mediator.mode = energy_transfer::DecompositionMode::FullWithMediator();
-    auto res_mediator =
-        energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg_mediator);
+    auto res_mediator = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg_mediator);
 
     bool shape_ok = false, all_finite = true, sums_match = true;
     Real max_abs_diff = 0.0;
@@ -126,7 +129,7 @@ int main(int argc, char *argv[]) {
           energy_transfer::BinningSpec::Linear(4);
       cfg_pu.terms = {"PU"};
       cfg_pu.mode = energy_transfer::DecompositionMode::FullWithMediator();
-      energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg_pu);
+      energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg_pu);
     } catch (const std::runtime_error &) {
       pu_rejected = true;
     }

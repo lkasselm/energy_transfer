@@ -12,7 +12,7 @@
 #include <kokkos_abstraction.hpp>
 #include <utils/error_checking.hpp>
 
-#include "energy_transfer/convert.hpp"
+#include "energy_transfer/spectra.hpp"
 #include "energy_transfer/spectral_kernels.hpp"
 
 namespace energy_transfer {
@@ -60,7 +60,7 @@ std::set<std::string> QuantityNamesForTerms(const std::vector<std::string> &term
 }
 
 // Splits the same lookup by which side each term uses a quantity on, so the
-// shared shell sweep in ComputeShellTransfer can build one small set of
+// shared shell sweep in ComputeEnergyTransfer can build one small set of
 // Q-side buffers and one of K-side buffers per (qi,mi)/(mi,ki) rather than a
 // single undifferentiated set.
 struct TermQuantityNames {
@@ -113,7 +113,8 @@ void CheckRuntimeConstraints(parthenon::Mesh *pmesh) {
 
 } // namespace
 
-FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg) {
+FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg,
+                                           const std::vector<std::string> &spectrum_names) {
   auto qnames = QuantityNamesForTerms(cfg.terms);
   auto tags = BaseFieldClosure(qnames);
 
@@ -122,24 +123,14 @@ FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg) {
   req.pres_or_energy = tags.count("P") > 0;
   req.acc = tags.count("Acc") > 0;
 
-  const auto &spec_table = BuiltinSpectra();
-  const auto &bundle_table = BuiltinSpectrumBundles();
-  for (auto &name : cfg.spectrum_names) {
-    auto spec_it = spec_table.find(name);
-    if (spec_it != spec_table.end()) {
-      if (spec_it->second.needs_mag) req.mag = true;
-      continue;
-    }
-    auto bundle_it = bundle_table.find(name);
-    PARTHENON_REQUIRE_THROWS(bundle_it != bundle_table.end(),
-                             "energy_transfer: unknown spectrum '" + name + "'");
-    if (bundle_it->second.needs_mag) req.mag = true;
+  for (auto &name : spectrum_names) {
+    if (SpectrumNeedsMag(name)) req.mag = true;
   }
   return req;
 }
 
-TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
-                                    const ShellTransferConfig &cfg) {
+TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
+                                     const ShellTransferConfig &cfg) {
   PARTHENON_REQUIRE_THROWS(!fields.is_conserved,
                            "energy_transfer: FlatFields must be in primitive form -- call "
                            "ConvertConservedToPrimitive() first.");
@@ -422,88 +413,7 @@ TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
     std::cout << "energy_transfer: done." << std::endl;
   }
 
-  const auto &spectrum_table = BuiltinSpectra();
-  const auto &bundle_table = BuiltinSpectrumBundles();
-  for (auto &name : cfg.spectrum_names) {
-    auto spec_it = spectrum_table.find(name);
-    if (spec_it != spectrum_table.end()) {
-      result.spectra.emplace(name, spec_it->second.fn(pmesh, fields, W_flat));
-      continue;
-    }
-    for (auto &[sub_name, arr] : bundle_table.at(name).fn(pmesh, fields, W_flat)) {
-      result.spectra.emplace(sub_name, arr);
-    }
-  }
-
   return result;
-}
-
-TransferResult ComputeShellTransferLive(parthenon::Mesh *pmesh, parthenon::MeshData<Real> *md,
-                                        const LiveFieldSpec &spec,
-                                        const ShellTransferConfig &cfg) {
-  const auto req = ComputeFieldRequirements(cfg);
-
-  LiveFieldSpec effective = spec;
-  if (!req.mag) {
-    effective.magnetic_var.reset();
-    effective.magnetic_components.reset();
-  }
-  if (!req.pres_or_energy) {
-    effective.pressure_or_energy_var.reset();
-    effective.pressure_or_energy_component.reset();
-  }
-  if (!req.acc) {
-    effective.acceleration_var.reset();
-    effective.acceleration_components.reset();
-  }
-  // Total energy includes the magnetic contribution, so converting it to
-  // pressure always requires the magnetic field, even if no B-dependent
-  // term was requested -- mirrors driver.cpp:310-311.
-  if (spec.is_conserved && req.pres_or_energy && !effective.magnetic_var) {
-    PARTHENON_REQUIRE_THROWS(
-        spec.magnetic_var.has_value(),
-        "ComputeShellTransferLive: converting conserved total energy to pressure requires "
-        "the magnetic field -- populate LiveFieldSpec::magnetic_var even though no "
-        "B-dependent term was requested.");
-    effective.magnetic_var = spec.magnetic_var;
-    effective.magnetic_components = spec.magnetic_components;
-  }
-
-  auto fields = GatherLiveFields(pmesh, md, effective);
-  ConvertConservedToPrimitive(fields);
-  return ComputeShellTransfer(pmesh, fields, cfg);
-}
-
-TransferResult ComputeShellTransferFromFile(parthenon::Mesh *pmesh,
-                                            const std::string &input_file,
-                                            const FileFieldNaming &naming,
-                                            const ShellTransferConfig &cfg) {
-  const auto req = ComputeFieldRequirements(cfg);
-  PARTHENON_REQUIRE_THROWS(!req.mag || naming.mag.has_value(),
-                           "ComputeShellTransferFromFile: requested terms need the magnetic "
-                           "field, but naming.mag is not set.");
-  PARTHENON_REQUIRE_THROWS(!req.pres_or_energy || naming.pres_or_energy.has_value(),
-                           "ComputeShellTransferFromFile: requested terms need "
-                           "pressure/energy, but naming.pres_or_energy is not set.");
-  PARTHENON_REQUIRE_THROWS(!req.acc || naming.acc.has_value(),
-                           "ComputeShellTransferFromFile: requested terms need the "
-                           "acceleration field, but naming.acc is not set.");
-  PARTHENON_REQUIRE_THROWS(!(naming.input_conserved && req.pres_or_energy) ||
-                               naming.mag.has_value(),
-                           "ComputeShellTransferFromFile: converting conserved total energy "
-                           "to pressure requires naming.mag to be set.");
-
-  FlatFields fields;
-  switch (DetectInputFileFormat(input_file)) {
-  case InputFileFormat::ADIOS2:
-    fields = ReadADIOS2Fields(pmesh, input_file, naming);
-    break;
-  case InputFileFormat::ParthenonHDF5:
-    fields = ReadPHDFFields(pmesh, input_file, naming);
-    break;
-  }
-  ConvertConservedToPrimitive(fields);
-  return ComputeShellTransfer(pmesh, fields, cfg);
 }
 
 namespace {
@@ -593,9 +503,6 @@ ShellTransferConfig ShellTransferConfig::FromInput(parthenon::ParameterInput *pi
 
   const auto mode_str = pin->GetOrAddString("energy_transfer", "mode", "full");
   cfg.mode = ParseDecompositionMode(mode_str);
-
-  const auto spectra_str = pin->GetOrAddString("energy_transfer", "spectra", "spec_U");
-  cfg.spectrum_names = SplitCommaList(spectra_str);
 
   return cfg;
 }

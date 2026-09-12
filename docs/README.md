@@ -6,9 +6,12 @@ lives outside both the Parthenon submodule and any single application's
 source tree) with two ways to use it:
 
 1. **On the fly**, linked into any Parthenon application: call
-   `energy_transfer::ComputeShellTransferLive(...)` from your own hook
-   (e.g. `UserWorkBeforeOutput`) with the `Mesh*`/`MeshData<Real>*` you
-   already have, then `energy_transfer::WriteResult(...)` to dump the
+   `energy_transfer::GatherLiveFields(...)` from your own hook (e.g.
+   `UserWorkBeforeOutput`) with the `Mesh*`/`MeshData<Real>*` you already
+   have, then `energy_transfer::ComputeEnergyTransfer(...)` and/or
+   `energy_transfer::ComputeSpectra(...)` (two independent, separately
+   callable computations -- call either, both, or neither, on whatever
+   cadence you like), then `energy_transfer::WriteResult(...)` to dump the
    result. No `StateDescriptor`/package registration required.
 2. **Offline**, via the `energy-transfer-offline` executable built alongside
    the library, which reads either an ADIOS2/bp5 snapshot (e.g. converted
@@ -61,7 +64,7 @@ which is the common case).
 Uniform grid, single mesh partition (`parthenon/mesh/pack_size = -1`),
 periodic boundary conditions, and a cubic domain (`x1max-x1min ==
 x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
-`ComputeShellTransfer` and throw a clear error otherwise.
+`ComputeEnergyTransfer` and throw a clear error otherwise.
 
 ## Public API (see `include/energy_transfer/`)
 
@@ -73,23 +76,37 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
   `MakeAthenaPKConservedLiveSpec`, passing your own `IDN`/`IV1`/... enum
   values, or `MakeSeparateFieldsLiveSpec` for the historical rho/vel/mag/
   acc/pres layout.
-- `shell_transfer.hpp` -- the main entry points:
+- `shell_transfer.hpp` -- shell-to-shell energy transfer, entirely
+  independent of spectra (see `spectra.hpp` below -- the two are separate
+  concerns with separate entry points, on purpose: an in-situ caller can
+  compute either, both, or neither, on whatever cadence it wants, and the
+  offline driver calls them one after the other rather than through one
+  fused call):
   - `ShellTransferConfig` -- `donor_binning`/`mediator_binning`/
     `receiver_binning` (each an independent `BinningSpec::Linear/Log/Custom`
     -- e.g. a narrow custom band pinning donor and receiver to two specific
     scales while mediator sweeps a fine `Log()` binning across whichever
     scales mediate that pair's transfer), `terms` (a plain list of names
-    selected from the library's fixed built-in set -- see below), `mode`
+    selected from the library's fixed built-in set -- see below), and `mode`
     (one `DecompositionMode` shared by every term in `terms` -- not
-    per-term, see below), and `spectrum_names`.
-  - `ComputeShellTransferLive(Mesh*, MeshData<Real>*, LiveFieldSpec, ShellTransferConfig)`
-  - `ComputeShellTransferFromFile(Mesh*, input_file, FileFieldNaming, ShellTransferConfig)`
-    -- dispatches to the ADIOS2 or Parthenon HDF5 reader based on
-    `input_file`'s extension (`ingest.hpp`'s `DetectInputFileFormat`).
-  - `ComputeFieldRequirements(cfg)` -- tells you which of magnetic field /
-    pressure-or-energy / acceleration the requested terms actually need, so
-    you can build a minimal `LiveFieldSpec`/`FileFieldNaming` (the offline
-    tool does this automatically).
+    per-term, see below).
+  - `ComputeEnergyTransfer(Mesh*, FlatFields&, ShellTransferConfig)` --
+    fields must already be ingested and in primitive form (`ingest.hpp`'s
+    `GatherLiveFields`/`ReadADIOS2Fields`/`ReadPHDFFields` +
+    `convert.hpp`'s `ConvertConservedToPrimitive`). Populates only
+    `TransferResult::matrices`.
+  - `ComputeFieldRequirements(cfg, spectrum_names)` -- tells you which of
+    magnetic field / pressure-or-energy / acceleration the requested terms
+    *and* spectra actually need, so you can build a minimal
+    `LiveFieldSpec`/`FileFieldNaming` (the offline tool does this
+    automatically).
+- `spectra.hpp` -- power spectra, independent of shell-to-shell transfer:
+  - `ParseSpectrumNames(pin)` -- reads `spectra=` from an input deck.
+  - `ComputeSpectra(Mesh*, const FlatFields&, spectrum_names)` -- same
+    ingested/primitive `FlatFields` as `ComputeEnergyTransfer` above; returns
+    a plain `map<string, HostArray2D<TransferReal>>` (a caller wanting both
+    fills it into `TransferResult::spectra` itself, e.g. before calling
+    `WriteResult`).
 - `io_openpmd.hpp` -- `WriteResult(...)` writes every computed term/spectrum
   as a named openPMD mesh record to a `.bp` file.
 
@@ -104,21 +121,27 @@ bundle pulls in the magnetic field the same way plain `spec_B` does).
 Requesting e.g. `spec_B_decomp` computes and writes **four** spectra
 together -- `spec_B`, `spec_B_compressive`, `spec_B_plus`, `spec_B_minus`
 (compressive = parallel to the wavevector `k`; plus/minus = the two
-circularly-polarized "helical" parts perpendicular to `k`) -- in one fused
-Forward()+mode-loop pass, since there's rarely a reason to want just one
-direction in isolation, and computing them separately would redundantly
-re-FFT the same field and redundantly recompute the same per-mode projection
-three times over (see `include/energy_transfer/decomposition.hpp` for the
-math, including why all three components -- plus/minus included -- are
-Hermitian-symmetric and could validly be reconstructed to real space with
-this library's existing r2c/c2r FFT if a future extension needs that; the
-current spectrum-only use never leaves Fourier space simply because a power
-spectrum never needs to, not as a workaround for anything). At every bin,
+circularly-polarized "helical" parts perpendicular to `k`) -- sharing a
+single `Forward()` FFT across all four (see
+`include/energy_transfer/decomposition.hpp`'s `DecomposeFourierField`, a
+pure per-mode Fourier-space decomposition with no notion of "spectrum" at
+all, and `include/energy_transfer/spectral_kernels.hpp`'s
+`BinFourierSpectrum`, a generic already-in-Fourier-space binning utility
+applied separately to the full field and to each decomposed component),
+since there's rarely a reason to want just one direction in isolation, and
+computing them separately would redundantly re-FFT the same field three
+times over. `decomposition.hpp` also explains why all three components --
+plus/minus included -- are Hermitian-symmetric and could validly be
+reconstructed to real space with this library's existing r2c/c2r FFT if a
+future extension needs that; the current spectrum-only use never leaves
+Fourier space simply because a power spectrum never needs to, not as a
+workaround for anything. At every bin **except `k=0`**,
 `spec_B_compressive + spec_B_plus + spec_B_minus` reconstructs `spec_B`
-exactly (Parseval/orthonormality of the projection basis) -- including the
-`k=0` bin, via the convention that the whole DC mode is assigned to
-compressive and plus/minus are zero there, since direction is undefined at
-`k=0`. Input decks request a bundle the same way as any other spectrum:
+exactly (Parseval/orthonormality of the projection basis); at the DC mode
+(`k=0`) direction is undefined, so all three are exactly zero there instead
+-- no convention routes that mode's power to any of them, it's simply not
+decomposed (only `spec_B` itself carries the true DC power). Input decks
+request a bundle the same way as any other spectrum:
 `spectra = spec_U,spec_B_decomp` (see
 `tools/energy_transfer_offline/parthinput.example`) -- the individual
 `spec_B_compressive` etc. names are not separately requestable.
@@ -130,7 +153,7 @@ to the whole domain -- collapsing an axis skips that axis's per-shell loop
 entirely rather than summing a full matrix after the fact, so e.g. `Total()`
 is O(1) in the number of shells, not O(n_shells^2). **`mode` applies to
 every term in `ShellTransferConfig::terms` -- it is not per-term.** This is
-deliberate: it lets `ComputeShellTransfer` share one `(Q,M,K)` shell sweep
+deliberate: it lets `ComputeEnergyTransfer` share one `(Q,M,K)` shell sweep
 across all requested terms instead of a separate sweep per term, which is
 what keeps peak memory bounded to a small, fixed number of in-flight
 shell-filtered fields (the distinct quantity names any requested term
@@ -278,9 +301,12 @@ your own code.
    call alongside it:
 
    ```cpp
+   #include "energy_transfer/convert.hpp"
    #include "energy_transfer/field_spec.hpp"
+   #include "energy_transfer/ingest.hpp"
    #include "energy_transfer/io_openpmd.hpp"
    #include "energy_transfer/shell_transfer.hpp"
+   #include "energy_transfer/spectra.hpp"
 
    void UserWorkBeforeOutput(Mesh *pmesh, ParameterInput *pin,
                              const parthenon::SimTime &tm) {
@@ -298,7 +324,15 @@ your own code.
          energy_transfer::BinningSpec::Log(20);
      cfg.terms = {"UUA", "UUC"}; // mode defaults to Full() -- shared by both terms
 
-     auto result = energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg);
+     // GatherLiveFields is a cheap, in-memory reshuffle of fields already
+     // resident in md -- no file I/O, unlike the offline driver's ingestion.
+     auto fields = energy_transfer::GatherLiveFields(pmesh, md.get(), spec);
+     energy_transfer::ConvertConservedToPrimitive(fields);
+
+     auto result = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
+     // Independent call -- compute spectra every cycle, energy transfer only
+     // some cycles, or vice versa, entirely up to you:
+     result.spectra = energy_transfer::ComputeSpectra(pmesh, fields, {"spec_U"});
      energy_transfer::WriteResult(result, "transfer", tm.ncycle);
    }
    ```

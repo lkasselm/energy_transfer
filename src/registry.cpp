@@ -1,10 +1,8 @@
 #include "energy_transfer/registry.hpp"
 
 #include <kokkos_abstraction.hpp>
-#include <utils/calc_spectrum.hpp>
 #include <utils/error_checking.hpp>
 
-#include "energy_transfer/decomposition.hpp"
 #include "energy_transfer/spectral_kernels.hpp"
 
 namespace energy_transfer {
@@ -344,72 +342,6 @@ parthenon::ParArray1D<Real> GradPOverSqrtRho(const ShellWorkspace &ws) {
   return out;
 }
 
-// ---- Spectra -----------------------------------------------------------
-
-parthenon::HostArray2D<TransferReal> SpecU(parthenon::Mesh *pm, const FlatFields &f,
-                                           const parthenon::ParArray1D<Real> & /*W_flat*/) {
-  auto spectra = parthenon::utils::fft::CalcSpectrum(pm, f.mom_or_vel, 3);
-  return spectra.GetHostMirrorAndCopy();
-}
-
-parthenon::HostArray2D<TransferReal> SpecRho(parthenon::Mesh *pm, const FlatFields &f,
-                                             const parthenon::ParArray1D<Real> & /*W_flat*/) {
-  auto spectra = parthenon::utils::fft::CalcSpectrum(pm, f.rho, 1);
-  return spectra.GetHostMirrorAndCopy();
-}
-
-parthenon::HostArray2D<TransferReal> SpecW(parthenon::Mesh *pm, const FlatFields & /*f*/,
-                                           const parthenon::ParArray1D<Real> &W_flat) {
-  auto spectra = parthenon::utils::fft::CalcSpectrum(pm, W_flat, 3);
-  return spectra.GetHostMirrorAndCopy();
-}
-
-parthenon::HostArray2D<TransferReal> SpecB(parthenon::Mesh *pm, const FlatFields &f,
-                                           const parthenon::ParArray1D<Real> & /*W_flat*/) {
-  auto spectra = parthenon::utils::fft::CalcSpectrum(pm, f.mag, 3);
-  return spectra.GetHostMirrorAndCopy();
-}
-
-// ---- Decomposed spectra (compressive / plus / minus, fused with full) --
-// One bundle per vector field (U, W, B); rho is scalar and has no direction
-// to decompose against. Each computes all four spectra in a single Forward()
-// + mode-loop pass (see decomposition.hpp's CalcDecomposedSpectrumBundle) --
-// there's rarely a reason to request just one direction, and doing so
-// separately would redundantly re-FFT the same field three times over.
-
-std::map<std::string, parthenon::HostArray2D<TransferReal>>
-SpecUDecomp(parthenon::Mesh *pm, const FlatFields &f, const parthenon::ParArray1D<Real> &) {
-  auto bundle = CalcDecomposedSpectrumBundle(pm, f.mom_or_vel, 3);
-  return {
-      {"spec_U", bundle.full.GetHostMirrorAndCopy()},
-      {"spec_U_compressive", bundle.compressive.GetHostMirrorAndCopy()},
-      {"spec_U_plus", bundle.plus.GetHostMirrorAndCopy()},
-      {"spec_U_minus", bundle.minus.GetHostMirrorAndCopy()},
-  };
-}
-
-std::map<std::string, parthenon::HostArray2D<TransferReal>>
-SpecWDecomp(parthenon::Mesh *pm, const FlatFields &, const parthenon::ParArray1D<Real> &W_flat) {
-  auto bundle = CalcDecomposedSpectrumBundle(pm, W_flat, 3);
-  return {
-      {"spec_W", bundle.full.GetHostMirrorAndCopy()},
-      {"spec_W_compressive", bundle.compressive.GetHostMirrorAndCopy()},
-      {"spec_W_plus", bundle.plus.GetHostMirrorAndCopy()},
-      {"spec_W_minus", bundle.minus.GetHostMirrorAndCopy()},
-  };
-}
-
-std::map<std::string, parthenon::HostArray2D<TransferReal>>
-SpecBDecomp(parthenon::Mesh *pm, const FlatFields &f, const parthenon::ParArray1D<Real> &) {
-  auto bundle = CalcDecomposedSpectrumBundle(pm, f.mag, 3);
-  return {
-      {"spec_B", bundle.full.GetHostMirrorAndCopy()},
-      {"spec_B_compressive", bundle.compressive.GetHostMirrorAndCopy()},
-      {"spec_B_plus", bundle.plus.GetHostMirrorAndCopy()},
-      {"spec_B_minus", bundle.minus.GetHostMirrorAndCopy()},
-  };
-}
-
 } // namespace
 
 const std::map<std::string, DerivedQuantity> &BuiltinQuantities() {
@@ -456,25 +388,6 @@ const std::map<std::string, TransferTerm> &BuiltinTerms() {
       {"UBPbb", {"Div_WOverSqrtRho_broadcast", "B_times_mag", -1.0}},
       {"PU", {"grad_P_over_sqrt_rho", "W_filter", -1.0}},
       {"FU", {"Acc_filter_times_sqrt_rho", "W_filter", 1.0}},
-  };
-  return table;
-}
-
-const std::map<std::string, Spectrum> &BuiltinSpectra() {
-  static const std::map<std::string, Spectrum> table = {
-      {"spec_U", {&SpecU, false}},
-      {"spec_rho", {&SpecRho, false}},
-      {"spec_W", {&SpecW, false}},
-      {"spec_B", {&SpecB, true}},
-  };
-  return table;
-}
-
-const std::map<std::string, SpectrumBundle> &BuiltinSpectrumBundles() {
-  static const std::map<std::string, SpectrumBundle> table = {
-      {"spec_U_decomp", {&SpecUDecomp, false}},
-      {"spec_W_decomp", {&SpecWDecomp, false}},
-      {"spec_B_decomp", {&SpecBDecomp, true}},
   };
   return table;
 }

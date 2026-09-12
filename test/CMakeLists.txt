@@ -14,4 +14,9 @@ add_executable(test_decomposed_spectrum_smoke test_decomposed_spectrum_smoke.cpp
 target_link_libraries(test_decomposed_spectrum_smoke PRIVATE energy_transfer Parthenon::parthenon MPI::MPI_CXX)
 add_test(NAME decomposed_spectrum_smoke COMMAND test_decomposed_spectrum_smoke -i ${CMAKE_CURRENT_SOURCE_DIR}/synthetic.in)
 
+add_executable(test_refactor_baseline test_refactor_baseline.cpp)
+target_link_libraries(test_refactor_baseline PRIVATE energy_transfer Parthenon::parthenon MPI::MPI_CXX)
+add_test(NAME refactor_baseline COMMAND test_refactor_baseline -i ${CMAKE_CURRENT_SOURCE_DIR}/synthetic.in
+         --golden ${CMAKE_CURRENT_SOURCE_DIR}/refactor_baseline_golden.txt)
+
 add_subdirectory(regression)

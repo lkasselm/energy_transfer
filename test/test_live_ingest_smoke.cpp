@@ -9,7 +9,9 @@
 #include <parthenon_manager.hpp>
 #include <utils/error_checking.hpp>
 
+#include "energy_transfer/convert.hpp"
 #include "energy_transfer/field_spec.hpp"
+#include "energy_transfer/ingest.hpp"
 #include "energy_transfer/shell_transfer.hpp"
 
 using parthenon::Real;
@@ -33,10 +35,11 @@ parthenon::Packages_t ProcessPackages(std::unique_ptr<parthenon::ParameterInput>
 
 // Single-rank smoke test for the on-the-fly (live) entry point: fills a
 // packed "prim" field the way AthenaPK would (constant density/pressure,
-// velocity as one Fourier mode), then calls ComputeShellTransferLive with no
-// package/StateDescriptor callbacks involved beyond the bare field -- proving
-// the live path needs nothing more than a Mesh*/MeshData<Real>* an app
-// already has inside its own UserWorkBeforeOutput.
+// velocity as one Fourier mode), then calls GatherLiveFields +
+// ComputeEnergyTransfer with no package/StateDescriptor callbacks involved
+// beyond the bare field -- proving the live path needs nothing more than a
+// Mesh*/MeshData<Real>* an app already has inside its own
+// UserWorkBeforeOutput.
 int main(int argc, char *argv[]) {
   parthenon::ParthenonManager pman;
   pman.app_input->ProcessPackages = ProcessPackages;
@@ -78,7 +81,9 @@ int main(int argc, char *argv[]) {
         energy_transfer::BinningSpec::Linear(4);
     cfg.terms = {"UUA"};
 
-    auto res = energy_transfer::ComputeShellTransferLive(pmesh, md.get(), spec, cfg);
+    auto fields = energy_transfer::GatherLiveFields(pmesh, md.get(), spec);
+    energy_transfer::ConvertConservedToPrimitive(fields);
+    auto res = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
 
     const bool has_uua = res.matrices.count("UUA") == 1;
     bool all_finite = true;
@@ -95,10 +100,10 @@ int main(int argc, char *argv[]) {
 
     if (parthenon::Globals::my_rank == 0) {
       if (has_uua && all_finite && res.n_donor_shells == 4 && res.n_receiver_shells == 4) {
-        std::cout << "PASS: ComputeShellTransferLive produced a finite " << res.n_donor_shells
+        std::cout << "PASS: ComputeEnergyTransfer produced a finite " << res.n_donor_shells
                   << "x" << res.n_receiver_shells << " UUA matrix.\n";
       } else {
-        std::cout << "FAIL: ComputeShellTransferLive result missing/non-finite/wrong shape.\n";
+        std::cout << "FAIL: ComputeEnergyTransfer result missing/non-finite/wrong shape.\n";
         result = 1;
       }
     }

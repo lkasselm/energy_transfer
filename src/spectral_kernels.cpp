@@ -1,5 +1,10 @@
 #include "energy_transfer/spectral_kernels.hpp"
 
+#include <cmath>
+
+#include <globals.hpp>
+#include <kokkos_abstraction.hpp>
+#include <utils/error_checking.hpp>
 #include <utils/uniform_grid_helper.hpp>
 
 namespace energy_transfer {
@@ -101,6 +106,80 @@ void SpectralDivergence(parthenon::FFTManager *fft_mgr,
 
   fft_mgr->Backward(FT_scratch.data(), div_out.data());
   Kokkos::fence();
+}
+
+parthenon::ParArray2D<parthenon::utils::fft::SpecReal>
+BinFourierSpectrum(parthenon::Mesh *pm,
+                  const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_field, int n_comp) {
+  using parthenon::utils::fft::SpecReal;
+
+  PARTHENON_REQUIRE_THROWS(pm != nullptr, "BinFourierSpectrum: mesh pointer must not be null");
+  PARTHENON_REQUIRE_THROWS(n_comp > 0, "BinFourierSpectrum: n_comp must be positive");
+
+  auto FFTMgr = pm->GetFFTManager();
+  const auto fft_size_outbox = FFTMgr->size_fourier_space_box();
+  PARTHENON_REQUIRE_THROWS(
+      FT_field.size() == static_cast<std::size_t>(n_comp) * fft_size_outbox,
+      "BinFourierSpectrum: input array has the wrong size for n_comp * "
+      "size_fourier_space_box().");
+
+  auto mesh_size = pm->mesh_size;
+  const auto nx = mesh_size.nx(parthenon::X1DIR);
+  const auto ny = mesh_size.nx(parthenon::X2DIR);
+  const auto nz = mesh_size.nx(parthenon::X3DIR);
+  const auto k_max = std::sqrt(Real(nx / 2) * Real(nx / 2) + Real(ny / 2) * Real(ny / 2) +
+                               Real(nz / 2) * Real(nz / 2));
+  const auto num_bins = static_cast<int>(std::ceil(k_max)) + 1;
+
+  parthenon::ParArray2D<SpecReal> spectra("BinFourierSpectrum output", num_bins, 3);
+  auto scatter_spectra = Kokkos::Experimental::ScatterView<SpecReal **, parthenon::LayoutWrapper>(
+      spectra.KokkosView());
+
+  auto FT_in = FT_field.data();
+  const int nc = n_comp;
+  auto fb = FFTMgr->fourier_space_box();
+  auto kernel_helper = FFTMgr->GetKernelHelper();
+  parthenon::par_for(
+      "BinFourierSpectrum", fb.low[2], fb.high[2], fb.low[1], fb.high[1], fb.low[0], fb.high[0],
+      KOKKOS_LAMBDA(const int k, const int j, const int i) {
+        auto k_vec = kernel_helper.Wavevector(k, j, i);
+        auto k_mag =
+            Kokkos::sqrt(Real(k_vec[0] * k_vec[0] + k_vec[1] * k_vec[1] + k_vec[2] * k_vec[2]));
+        auto k_mag_int = static_cast<int>(Kokkos::floor(k_mag));
+        auto outidx = kernel_helper.FourierFlatIndex(k, j, i);
+
+        Real val = 0.0;
+        for (int n = 0; n < nc; n++) {
+          const auto v = FT_in[outidx + n * fft_size_outbox];
+          val += v.real() * v.real() + v.imag() * v.imag();
+        }
+
+        // k_vec[2] is kx (r2c-stored, always >=0); doubles power for modes
+        // whose Hermitian-conjugate partner (at -k, kx<0) isn't separately
+        // stored -- identical to CalcSpectrum's own convention.
+        const auto fac = ((k_vec[2] > 0) && (2 * k_vec[2] != nx)) ? 2.0 : 1.0;
+        auto s = scatter_spectra.access();
+        s(k_mag_int, 0) += fac * SpecReal(val);
+        s(k_mag_int, 1) += fac * k_mag;
+        s(k_mag_int, 2) += fac * 1.0;
+      });
+
+  Kokkos::Experimental::contribute(spectra.KokkosView(), scatter_spectra);
+  Kokkos::fence();
+
+#ifdef MPI_PARALLEL
+  PARTHENON_REQUIRE_THROWS(sizeof(SpecReal) == sizeof(double),
+                           "Need to fix comm data types manually.");
+  if (parthenon::Globals::my_rank == 0) {
+    PARTHENON_MPI_CHECK(MPI_Reduce(MPI_IN_PLACE, spectra.data(), spectra.size(), MPI_DOUBLE,
+                                   MPI_SUM, 0, MPI_COMM_WORLD));
+  } else {
+    PARTHENON_MPI_CHECK(MPI_Reduce(spectra.data(), spectra.data(), spectra.size(), MPI_DOUBLE,
+                                   MPI_SUM, 0, MPI_COMM_WORLD));
+  }
+#endif
+
+  return spectra;
 }
 
 } // namespace energy_transfer

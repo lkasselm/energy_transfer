@@ -1,9 +1,11 @@
 #include <parthenon_manager.hpp>
 #include <utils/error_checking.hpp>
 
+#include "energy_transfer/convert.hpp"
 #include "energy_transfer/ingest.hpp"
 #include "energy_transfer/io_openpmd.hpp"
 #include "energy_transfer/shell_transfer.hpp"
+#include "energy_transfer/spectra.hpp"
 
 // Thin standalone driver: builds just enough Parthenon Mesh infrastructure
 // (for FFTManager/UniformGridHelper) to read an ADIOS2/bp5 snapshot and run
@@ -37,11 +39,24 @@ int main(int argc, char *argv[]) {
     const auto output_number = pin->GetOrAddInteger("energy_transfer", "output_number", 0);
 
     auto cfg = energy_transfer::ShellTransferConfig::FromInput(pin);
-    const auto req = energy_transfer::ComputeFieldRequirements(cfg);
+    auto spectrum_names = energy_transfer::ParseSpectrumNames(pin);
+    const auto req = energy_transfer::ComputeFieldRequirements(cfg, spectrum_names);
     const auto naming = energy_transfer::FileFieldNaming::FromInput(
         pin, input_file, req.mag, req.pres_or_energy, req.acc);
 
-    auto result = energy_transfer::ComputeShellTransferFromFile(pmesh, input_file, naming, cfg);
+    energy_transfer::FlatFields fields;
+    switch (energy_transfer::DetectInputFileFormat(input_file)) {
+    case energy_transfer::InputFileFormat::ADIOS2:
+      fields = energy_transfer::ReadADIOS2Fields(pmesh, input_file, naming);
+      break;
+    case energy_transfer::InputFileFormat::ParthenonHDF5:
+      fields = energy_transfer::ReadPHDFFields(pmesh, input_file, naming);
+      break;
+    }
+    energy_transfer::ConvertConservedToPrimitive(fields);
+
+    auto result = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
+    result.spectra = energy_transfer::ComputeSpectra(pmesh, fields, spectrum_names);
     energy_transfer::WriteResult(result, output_file, output_number);
   }
 

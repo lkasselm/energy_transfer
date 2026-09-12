@@ -5,6 +5,8 @@
 
 #include <basic_types.hpp>
 #include <kokkos_types.hpp>
+#include <mesh/mesh.hpp>
+#include <utils/calc_spectrum.hpp>
 #include <utils/fft_manager.hpp>
 
 namespace energy_transfer {
@@ -42,6 +44,18 @@ void SpectralDivergence(parthenon::FFTManager *fft_mgr,
                         const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_vec,
                         parthenon::ParArray1D<Kokkos::complex<Real>> &FT_scratch,
                         parthenon::ParArray1D<Real> &div_out, Real two_pi_over_L);
+
+// Bins an already-Fourier-transformed field into a power spectrum by |k|,
+// matching parthenon::utils::fft::CalcSpectrum's exact convention (same
+// num_bins = ceil(k_max)+1, same floor(|k|) bin index, same
+// Hermitian-doubling factor for r2c-redundant modes, same MPI_Reduce to rank
+// 0) -- for a field that is already in Fourier space (this library's own
+// FT_U/FT_B/etc., or energy_transfer::DecomposedFourierField's output)
+// rather than a Mesh variable CalcSpectrum would forward-transform itself.
+// FT_field is n_comp * size_fourier_space_box().
+parthenon::ParArray2D<parthenon::utils::fft::SpecReal>
+BinFourierSpectrum(parthenon::Mesh *pm,
+                  const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_field, int n_comp);
 
 } // namespace energy_transfer
 

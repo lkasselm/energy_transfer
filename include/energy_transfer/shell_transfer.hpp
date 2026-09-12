@@ -5,13 +5,10 @@
 #include <string>
 #include <vector>
 
-#include <interface/mesh_data.hpp>
 #include <mesh/mesh.hpp>
 #include <parameter_input.hpp>
 
-#include "energy_transfer/field_spec.hpp"
 #include "energy_transfer/flat_fields.hpp"
-#include "energy_transfer/ingest.hpp"
 #include "energy_transfer/registry.hpp"
 
 namespace energy_transfer {
@@ -33,7 +30,7 @@ struct BinningSpec {
 // Which shell axes are resolved per-shell vs collapsed to the whole domain,
 // for EVERY term requested in a given ShellTransferConfig::terms (see
 // ShellTransferConfig::mode below -- this is deliberately a single global
-// setting, not per-term, so that ComputeShellTransfer can share one (Q,M,K)
+// setting, not per-term, so that ComputeEnergyTransfer can share one (Q,M,K)
 // shell sweep across all requested terms instead of a separate sweep per
 // term. That shared sweep is what keeps peak memory bounded to a small,
 // fixed number of in-flight shell-filtered fields, independent of shell
@@ -87,7 +84,7 @@ struct ShellTransferConfig {
   BinningSpec receiver_binning = BinningSpec::Linear(20);
   std::vector<std::string> terms; // names from the library's fixed built-in set (BuiltinTerms())
   // ONE DecompositionMode shared by every term in `terms` above -- not
-  // per-term. This is what lets ComputeShellTransfer share a single (Q,M,K)
+  // per-term. This is what lets ComputeEnergyTransfer share a single (Q,M,K)
   // shell sweep across all requested terms (see shell_transfer.cpp), which
   // in turn is what keeps peak memory bounded to a small, fixed number of
   // in-flight shell-filtered fields regardless of shell count or term count
@@ -97,7 +94,6 @@ struct ShellTransferConfig {
   // like rho -- currently PU and FU), the whole call throws immediately,
   // before any computation starts.
   DecompositionMode mode = DecompositionMode::Full();
-  std::vector<std::string> spectrum_names; // names from BuiltinSpectra()
 
   // Reads an <energy_transfer> input block: binning=lin|log|custom,
   // num_shells=, shell_edges= set a default binning shared by all three
@@ -107,8 +103,9 @@ struct ShellTransferConfig {
   // is a plain comma-separated name list (no per-term mode suffix); mode=
   // (full/by_sender/by_receiver/total/full_mediator/by_sender_mediator/
   // by_receiver_mediator/mediator_only, default full) sets the one
-  // DecompositionMode shared by all of them. Also reads
-  // spectra=spec_U,spec_rho,...
+  // DecompositionMode shared by all of them. Does NOT read spectra= --
+  // that's a separate, independent concern, see spectra.hpp's
+  // ParseSpectrumNames.
   static ShellTransferConfig FromInput(parthenon::ParameterInput *pin);
 };
 
@@ -127,39 +124,33 @@ struct TransferResult {
   // was set, matching how n_q/n_k collapse to 1 for an unresolved donor/receiver
   // side).
   std::map<std::string, parthenon::HostArray3D<TransferReal>> matrices;
-  std::map<std::string, parthenon::HostArray2D<TransferReal>> spectra; // keyed by spectrum name
+  // Keyed by spectrum name -- left empty by ComputeEnergyTransfer (it knows
+  // nothing about spectra); a caller wanting both fills this in itself from
+  // ComputeSpectra's result (see spectra.hpp) before e.g. passing the result
+  // to WriteResult.
+  std::map<std::string, parthenon::HostArray2D<TransferReal>> spectra;
 };
 
 // Which real-space fields ingestion must load for the requested terms/
 // spectra to be computable. Used to build a minimal LiveFieldSpec/
-// FileFieldNaming before ingestion runs.
+// FileFieldNaming before ingestion runs. spectrum_names is typically
+// ParseSpectrumNames(pin) (see spectra.hpp) -- passed in explicitly rather
+// than folded into ShellTransferConfig, since spectra are an independent
+// concern from the shell-transfer terms.
 struct FieldRequirements {
   bool mag = false;
   bool pres_or_energy = false;
   bool acc = false;
 };
-FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg);
+FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg,
+                                           const std::vector<std::string> &spectrum_names);
 
 // Core computation: fields must already be in primitive form (see
 // ConvertConservedToPrimitive) and populated per ComputeFieldRequirements(cfg).
-TransferResult ComputeShellTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
-                                    const ShellTransferConfig &cfg);
-
-// Live/on-the-fly entry point -- a plain function, no StateDescriptor/package
-// registration. Call from an app's own UserWorkBeforeOutput or similar hook,
-// which already has a Mesh*/MeshData<Real>*.
-TransferResult ComputeShellTransferLive(parthenon::Mesh *pmesh, parthenon::MeshData<Real> *md,
-                                        const LiveFieldSpec &spec,
-                                        const ShellTransferConfig &cfg);
-
-// Offline entry point: reads an ADIOS2/bp5 or Parthenon HDF5 (.phdf/.h5/
-// .hdf5) snapshot directly, dispatching on input_file's extension (see
-// DetectInputFileFormat in ingest.hpp) -- naming must have been built with
-// the matching FileFieldNaming::FromInputADIOS2/FromInputPHDF/FromInput.
-TransferResult ComputeShellTransferFromFile(parthenon::Mesh *pmesh,
-                                            const std::string &input_file,
-                                            const FileFieldNaming &naming,
-                                            const ShellTransferConfig &cfg);
+// Populates only TransferResult::matrices -- see spectra.hpp's ComputeSpectra
+// for the independent, separately-callable spectra computation.
+TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
+                                     const ShellTransferConfig &cfg);
 
 } // namespace energy_transfer
 

@@ -104,6 +104,7 @@ add_library(energy_transfer
   src/ingest_adios2.cpp
   src/ingest_phdf.cpp
   src/registry.cpp
+  src/spectra.cpp
   src/shell_transfer.cpp
   src/io_openpmd.cpp
 )
