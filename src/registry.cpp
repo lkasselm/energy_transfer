@@ -18,75 +18,69 @@ void ZeroVec(parthenon::ParArray1D<Real> &v, std::size_t n3) {
       Kokkos::View<Real *, Kokkos::DefaultExecutionSpace::memory_space>(v.data(), n3), 0.0);
 }
 
-Real UnrestrictedKHigh(const ShellWorkspace &ws) { return Real(ws.Nx + ws.Ny + ws.Nz); }
-
-// ---- Mediator shell-filtering helpers ---------------------------------
+// ---- Shell-filtering helpers ------------------------------------------
 //
-// Both return field_full completely unchanged whenever ws.mediator_active is
-// false (the common case) -- no extra FFT/filter work happens, preserving
-// the same cost as before mediator decomposition existed.
+// Both take whichever ShellRestriction the caller means -- ws.axis (this
+// quantity's own donor/receiver shell) or ws.mediator (the shell of the
+// mediating field it reads). Donor, receiver, and mediator are on equal
+// footing: whenever a restriction is inactive, field_full comes back
+// completely unchanged (no extra FFT/filter work, DC mode included), and
+// the caller never has to know which axis it was.
 
-// Vector (3-component) mediator with an already-computed full-domain FT
-// (FT_U/FT_B/FT_b) -- shell-filters it to (ws.m_low, ws.m_high).
+// Vector (3-component) field with an already-computed full-domain FT
+// (FT_W/FT_U/FT_B/FT_b/FT_Acc) -- shell-filters it to (low, high].
 parthenon::ParArray1D<Real>
-FilterMediatorVector(const ShellWorkspace &ws, const char *name,
-                     const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_field_full,
-                     const parthenon::ParArray1D<Real> &field_full) {
-  if (!ws.mediator_active) return field_full;
+FilterVector(const ShellWorkspace &ws, const ShellRestriction &restriction, const char *name,
+             const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_field_full,
+             const parthenon::ParArray1D<Real> &field_full) {
+  if (!restriction.active) return field_full;
   auto out = AllocVec(name, ws.fft_size_inbox);
-  parthenon::ParArray1D<Kokkos::complex<Real>> scratch(std::string(name) + "_med_scratch",
+  parthenon::ParArray1D<Kokkos::complex<Real>> scratch(std::string(name) + "_scratch",
                                                         3 * ws.fft_size_outbox);
-  ShellFilter(ws.fft_mgr, 3, FT_field_full, scratch, out, ws.m_low, ws.m_high);
+  ShellFilter(ws.fft_mgr, 3, FT_field_full, scratch, out, restriction.low, restriction.high);
   return out;
 }
 
-// Scalar mediator with no persistent FT array (div(U), div(b)) -- forward-
+// Scalar field with no persistent FT array (div(U), div(b)) -- forward-
 // transforms field_full once, then shell-filters, mirroring the inline
-// Forward()-then-ShellFilter idiom already used by DivbW/GradBdotBQScaled
-// for their own (non-mediator) on-the-fly spectral work.
-parthenon::ParArray1D<Real> FilterMediatorScalar(const ShellWorkspace &ws, const char *name,
-                                                 const parthenon::ParArray1D<Real> &field_full) {
-  if (!ws.mediator_active) return field_full;
+// Forward()-then-ShellFilter idiom also used by DivbW/GradBdotBQScaled for
+// their own on-the-fly spectral work.
+parthenon::ParArray1D<Real> FilterScalar(const ShellWorkspace &ws,
+                                         const ShellRestriction &restriction, const char *name,
+                                         const parthenon::ParArray1D<Real> &field_full) {
+  if (!restriction.active) return field_full;
   const auto n = ws.fft_size_inbox;
   const auto nout = ws.fft_size_outbox;
-  parthenon::ParArray1D<Kokkos::complex<Real>> FT_scratch(std::string(name) + "_med_FT", nout);
+  parthenon::ParArray1D<Kokkos::complex<Real>> FT_scratch(std::string(name) + "_FT", nout);
   ws.fft_mgr->Forward(field_full.data(), FT_scratch.data());
   parthenon::ParArray1D<Real> out(name, n);
-  parthenon::ParArray1D<Kokkos::complex<Real>> filter_scratch(std::string(name) + "_med_scratch",
+  parthenon::ParArray1D<Kokkos::complex<Real>> filter_scratch(std::string(name) + "_scratch",
                                                                nout);
-  ShellFilter(ws.fft_mgr, 1, FT_scratch, filter_scratch, out, ws.m_low, ws.m_high);
+  ShellFilter(ws.fft_mgr, 1, FT_scratch, filter_scratch, out, restriction.low, restriction.high);
   return out;
 }
 
 // ---- Level 1: derived-quantity providers -----------------------------
 
 parthenon::ParArray1D<Real> WFilter(const ShellWorkspace &ws) {
-  auto out = AllocVec("W_filter", ws.fft_size_inbox);
-  parthenon::ParArray1D<Kokkos::complex<Real>> scratch("W_filter_scratch",
-                                                        3 * ws.fft_size_outbox);
-  ShellFilter(ws.fft_mgr, 3, ws.ft->FT_W, scratch, out, ws.k_low, ws.k_high);
-  return out;
+  return FilterVector(ws, ws.axis, "W_filter", ws.ft->FT_W, ws.aux->W_flat);
 }
 
 parthenon::ParArray1D<Real> BFilter(const ShellWorkspace &ws) {
-  auto out = AllocVec("B_filter", ws.fft_size_inbox);
-  parthenon::ParArray1D<Kokkos::complex<Real>> scratch("B_filter_scratch",
-                                                        3 * ws.fft_size_outbox);
-  ShellFilter(ws.fft_mgr, 3, ws.ft->FT_B, scratch, out, ws.k_low, ws.k_high);
-  return out;
+  return FilterVector(ws, ws.axis, "B_filter", ws.ft->FT_B, ws.fields->mag);
 }
 
 parthenon::ParArray1D<Real> AccFilterTimesSqrtRho(const ShellWorkspace &ws) {
-  auto out = AllocVec("Acc_filter", ws.fft_size_inbox);
-  parthenon::ParArray1D<Kokkos::complex<Real>> scratch("Acc_filter_scratch",
-                                                        3 * ws.fft_size_outbox);
-  ShellFilter(ws.fft_mgr, 3, ws.ft->FT_Acc, scratch, out, ws.k_low, ws.k_high);
+  // FilterVector aliases fields->acc when the axis is inactive, so the
+  // sqrt(rho) scaling must go into a fresh buffer rather than in place.
+  auto filtered = FilterVector(ws, ws.axis, "Acc_filter", ws.ft->FT_Acc, ws.fields->acc);
   const auto n = ws.fft_size_inbox;
+  auto out = AllocVec("Acc_filter_scaled", n);
   auto rho = ws.fields->rho;
   parthenon::par_for(
       "ScaleAccBySqrtRho", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
         const Real s = Kokkos::sqrt(rho(idx));
-        for (int c = 0; c < 3; c++) out(c * n + idx) *= s;
+        for (int c = 0; c < 3; c++) out(c * n + idx) = filtered(c * n + idx) * s;
       });
   return out;
 }
@@ -97,11 +91,11 @@ parthenon::ParArray1D<Real> UdotGradW(const ShellWorkspace &ws) {
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("UdotGradW_scratch", ws.fft_size_outbox);
   parthenon::ParArray1D<Real> deriv("UdotGradW_deriv", n);
-  auto vel = FilterMediatorVector(ws, "UdotGradW_U_med", ws.ft->FT_U, ws.fields->mom_or_vel);
+  auto vel = FilterVector(ws, ws.mediator, "UdotGradW_U_med", ws.ft->FT_U, ws.fields->mom_or_vel);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_W, comp_i * ws.fft_size_outbox, scratch, 0,
-                            deriv, 0, ws.k_low, ws.k_high, dir_j, ws.two_pi_over_L);
+                            deriv, 0, ws.axis.low, ws.axis.high, dir_j, ws.two_pi_over_L);
       const std::size_t vel_offset = dir_j * n;
       const std::size_t out_offset = comp_i * n;
       parthenon::par_for(
@@ -119,11 +113,11 @@ parthenon::ParArray1D<Real> UdotGradB(const ShellWorkspace &ws) {
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("UdotGradB_scratch", ws.fft_size_outbox);
   parthenon::ParArray1D<Real> deriv("UdotGradB_deriv", n);
-  auto vel = FilterMediatorVector(ws, "UdotGradB_U_med", ws.ft->FT_U, ws.fields->mom_or_vel);
+  auto vel = FilterVector(ws, ws.mediator, "UdotGradB_U_med", ws.ft->FT_U, ws.fields->mom_or_vel);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_B, comp_i * ws.fft_size_outbox, scratch, 0,
-                            deriv, 0, ws.k_low, ws.k_high, dir_j, ws.two_pi_over_L);
+                            deriv, 0, ws.axis.low, ws.axis.high, dir_j, ws.two_pi_over_L);
       const std::size_t vel_offset = dir_j * n;
       const std::size_t out_offset = comp_i * n;
       parthenon::par_for(
@@ -141,11 +135,11 @@ parthenon::ParArray1D<Real> BDotGradB(const ShellWorkspace &ws) {
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("bDotGradB_scratch", ws.fft_size_outbox);
   parthenon::ParArray1D<Real> deriv("bDotGradB_deriv", n);
-  auto b = FilterMediatorVector(ws, "BDotGradB_b_med", ws.ft->FT_b, ws.aux->b_flat);
+  auto b = FilterVector(ws, ws.mediator, "BDotGradB_b_med", ws.ft->FT_b, ws.aux->b_flat);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_B, comp_i * ws.fft_size_outbox, scratch, 0,
-                            deriv, 0, ws.k_low, ws.k_high, dir_j, ws.two_pi_over_L);
+                            deriv, 0, ws.axis.low, ws.axis.high, dir_j, ws.two_pi_over_L);
       const std::size_t b_offset = dir_j * n;
       const std::size_t out_offset = comp_i * n;
       parthenon::par_for(
@@ -163,11 +157,11 @@ parthenon::ParArray1D<Real> BDotGradW(const ShellWorkspace &ws) {
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("bDotGradW_scratch", ws.fft_size_outbox);
   parthenon::ParArray1D<Real> deriv("bDotGradW_deriv", n);
-  auto b = FilterMediatorVector(ws, "BDotGradW_b_med", ws.ft->FT_b, ws.aux->b_flat);
+  auto b = FilterVector(ws, ws.mediator, "BDotGradW_b_med", ws.ft->FT_b, ws.aux->b_flat);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_W, comp_i * ws.fft_size_outbox, scratch, 0,
-                            deriv, 0, ws.k_low, ws.k_high, dir_j, ws.two_pi_over_L);
+                            deriv, 0, ws.axis.low, ws.axis.high, dir_j, ws.two_pi_over_L);
       const std::size_t b_offset = dir_j * n;
       const std::size_t out_offset = comp_i * n;
       parthenon::par_for(
@@ -182,7 +176,7 @@ parthenon::ParArray1D<Real> BDotGradW(const ShellWorkspace &ws) {
 parthenon::ParArray1D<Real> WTimesDivU(const ShellWorkspace &ws) {
   auto w = WFilter(ws);
   const auto n = ws.fft_size_inbox;
-  auto divu = FilterMediatorScalar(ws, "WTimesDivU_DivU_med", ws.aux->DivU);
+  auto divu = FilterScalar(ws, ws.mediator, "WTimesDivU_DivU_med", ws.aux->DivU);
   auto out = AllocVec("W_times_DivU", n);
   parthenon::par_for(
       "WTimesDivU", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -195,7 +189,7 @@ parthenon::ParArray1D<Real> WTimesDivU(const ShellWorkspace &ws) {
 parthenon::ParArray1D<Real> BTimesDivU(const ShellWorkspace &ws) {
   auto b = BFilter(ws);
   const auto n = ws.fft_size_inbox;
-  auto divu = FilterMediatorScalar(ws, "BTimesDivU_DivU_med", ws.aux->DivU);
+  auto divu = FilterScalar(ws, ws.mediator, "BTimesDivU_DivU_med", ws.aux->DivU);
   auto out = AllocVec("B_times_DivU", n);
   parthenon::par_for(
       "BTimesDivU", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -208,7 +202,7 @@ parthenon::ParArray1D<Real> BTimesDivU(const ShellWorkspace &ws) {
 parthenon::ParArray1D<Real> WTimesDivb(const ShellWorkspace &ws) {
   auto w = WFilter(ws);
   const auto n = ws.fft_size_inbox;
-  auto divb = FilterMediatorScalar(ws, "WTimesDivb_Divb_med", ws.aux->Divb);
+  auto divb = FilterScalar(ws, ws.mediator, "WTimesDivb_Divb_med", ws.aux->Divb);
   auto out = AllocVec("W_times_Divb", n);
   parthenon::par_for(
       "WTimesDivb", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -226,7 +220,7 @@ parthenon::ParArray1D<Real> DivbW(const ShellWorkspace &ws) {
   const auto n = ws.fft_size_inbox;
   const auto nout = ws.fft_size_outbox;
   auto w = WFilter(ws);
-  auto b = FilterMediatorVector(ws, "DivbW_b_med", ws.ft->FT_b, ws.aux->b_flat);
+  auto b = FilterVector(ws, ws.mediator, "DivbW_b_med", ws.ft->FT_b, ws.aux->b_flat);
   auto out = AllocVec("DivbW", n);
   ZeroVec(out, 3 * n);
   parthenon::ParArray1D<Real> scalar_scratch("DivbW_scalar_scratch", n);
@@ -234,7 +228,7 @@ parthenon::ParArray1D<Real> DivbW(const ShellWorkspace &ws) {
                                                                  nout);
   parthenon::ParArray1D<Kokkos::complex<Real>> deriv_scratch("DivbW_deriv_scratch", nout);
   parthenon::ParArray1D<Real> deriv("DivbW_deriv", n);
-  const Real huge_k = UnrestrictedKHigh(ws);
+  const Real huge_k = NoRestrictionKHigh(ws.Nx, ws.Ny, ws.Nz);
   for (int comp_i = 0; comp_i < 3; comp_i++) {
     for (int dir_j = 0; dir_j < 3; dir_j++) {
       const std::size_t b_offset = dir_j * n;
@@ -244,8 +238,8 @@ parthenon::ParArray1D<Real> DivbW(const ShellWorkspace &ws) {
             scalar_scratch(idx) = b(b_offset + idx) * w(w_offset + idx);
           });
       ws.fft_mgr->Forward(scalar_scratch.data(), FT_scalar_scratch.data());
-      ShellFilterDerivative(ws.fft_mgr, FT_scalar_scratch, 0, deriv_scratch, 0, deriv, 0, -1.0,
-                            huge_k, dir_j, ws.two_pi_over_L);
+      ShellFilterDerivative(ws.fft_mgr, FT_scalar_scratch, 0, deriv_scratch, 0, deriv, 0,
+                            kNoRestrictionKLow, huge_k, dir_j, ws.two_pi_over_L);
       const std::size_t out_offset = comp_i * n;
       parthenon::par_for(
           "DivbW_accum", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -260,7 +254,7 @@ parthenon::ParArray1D<Real> GradBdotBQScaled(const ShellWorkspace &ws) {
   const auto n = ws.fft_size_inbox;
   const auto nout = ws.fft_size_outbox;
   auto bq = BFilter(ws);
-  auto mag = FilterMediatorVector(ws, "GradBdotBQ_B_med", ws.ft->FT_B, ws.fields->mag);
+  auto mag = FilterVector(ws, ws.mediator, "GradBdotBQ_B_med", ws.ft->FT_B, ws.fields->mag);
   auto rho = ws.fields->rho; // scalar normalization, not a decomposable mediator
   parthenon::ParArray1D<Real> scalar_scratch("GradBdotBQ_scalar", n);
   parthenon::par_for(
@@ -273,10 +267,10 @@ parthenon::ParArray1D<Real> GradBdotBQScaled(const ShellWorkspace &ws) {
   ws.fft_mgr->Forward(scalar_scratch.data(), FT_scalar.data());
   auto out = AllocVec("GradBdotBQ", n);
   parthenon::ParArray1D<Kokkos::complex<Real>> deriv_scratch("GradBdotBQ_deriv_scratch", nout);
-  const Real huge_k = UnrestrictedKHigh(ws);
+  const Real huge_k = NoRestrictionKHigh(ws.Nx, ws.Ny, ws.Nz);
   for (int dir_j = 0; dir_j < 3; dir_j++) {
-    ShellFilterDerivative(ws.fft_mgr, FT_scalar, 0, deriv_scratch, 0, out, dir_j * n, -1.0,
-                          huge_k, dir_j, ws.two_pi_over_L);
+    ShellFilterDerivative(ws.fft_mgr, FT_scalar, 0, deriv_scratch, 0, out, dir_j * n,
+                          kNoRestrictionKLow, huge_k, dir_j, ws.two_pi_over_L);
   }
   parthenon::par_for(
       "ScaleGradBdotBQ", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
@@ -289,7 +283,7 @@ parthenon::ParArray1D<Real> GradBdotBQScaled(const ShellWorkspace &ws) {
 parthenon::ParArray1D<Real> BTimesMag(const ShellWorkspace &ws) {
   auto b = BFilter(ws);
   const auto n = ws.fft_size_inbox;
-  auto mag = FilterMediatorVector(ws, "BTimesMag_B_med", ws.ft->FT_B, ws.fields->mag);
+  auto mag = FilterVector(ws, ws.mediator, "BTimesMag_B_med", ws.ft->FT_B, ws.fields->mag);
   auto out = AllocVec("B_times_mag", n);
   parthenon::par_for(
       "BTimesMag", std::size_t(0), 3 * n - 1,
@@ -330,8 +324,8 @@ parthenon::ParArray1D<Real> GradPOverSqrtRho(const ShellWorkspace &ws) {
   auto out = AllocVec("gradP", n);
   parthenon::ParArray1D<Kokkos::complex<Real>> scratch("gradP_scratch", nout);
   for (int dir_j = 0; dir_j < 3; dir_j++) {
-    ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_P, 0, scratch, 0, out, dir_j * n, ws.k_low,
-                          ws.k_high, dir_j, ws.two_pi_over_L);
+    ShellFilterDerivative(ws.fft_mgr, ws.ft->FT_P, 0, scratch, 0, out, dir_j * n, ws.axis.low,
+                          ws.axis.high, dir_j, ws.two_pi_over_L);
   }
   auto rho = ws.fields->rho;
   parthenon::par_for(

@@ -42,12 +42,13 @@ struct BinningSpec {
 // "Q" is the donor/advecting shell (outer loop), "K" the receiving shell
 // (inner loop), and "mediator" is the field each term's derived quantity
 // reads directly (e.g. the advecting velocity U in UUA, or the tension
-// field b in BUT) -- normally read full/unfiltered, but can optionally be
-// shell-restricted too, independently of donor/receiver. Collapsing an axis
-// evaluates that axis's derived quantity once over the whole domain
-// (k_low=0, k_high=unrestricted) instead of once per real shell bin --
-// shells partition Fourier space, so this reconstructs the unfiltered field
-// directly rather than summing per-shell results after the fact.
+// field b in BUT). All three axes are on equal footing: each is
+// independently either resolved (evaluated once per shell bin of its own
+// binning) or not (evaluated exactly once, with no filtering applied at all
+// -- the raw field passes straight through, DC mode included, at zero extra
+// FFT cost; see registry.hpp's ShellRestriction). Shells partition Fourier
+// space, so an unresolved axis reconstructs the unfiltered field directly
+// rather than summing per-shell results after the fact.
 //
 // Not every term has a decomposable mediator: some terms' only mediator is
 // a scalar normalization (density, via sqrt(rho) scaling) rather than a
@@ -58,18 +59,9 @@ struct BinningSpec {
 // starts. See src/registry.cpp's DerivedQuantity::has_decomposable_mediator
 // for the authoritative list.
 struct DecompositionMode {
-  bool donor_resolved = true;
+  bool donor_resolved = false;
   bool mediator_resolved = false;
-  bool receiver_resolved = true;
-
-  static DecompositionMode Full() { return {true, false, true}; }
-  static DecompositionMode BySender() { return {true, false, false}; }
-  static DecompositionMode ByReceiver() { return {false, false, true}; }
-  static DecompositionMode Total() { return {false, false, false}; }
-  static DecompositionMode FullWithMediator() { return {true, true, true}; }
-  static DecompositionMode BySenderWithMediator() { return {true, true, false}; }
-  static DecompositionMode ByReceiverWithMediator() { return {false, true, true}; }
-  static DecompositionMode MediatorOnly() { return {false, true, false}; }
+  bool receiver_resolved = false;
 };
 
 struct ShellTransferConfig {
@@ -93,7 +85,7 @@ struct ShellTransferConfig {
   // decomposable mediator (its mediator, if any, is a scalar normalization
   // like rho -- currently PU and FU), the whole call throws immediately,
   // before any computation starts.
-  DecompositionMode mode = DecompositionMode::Full();
+  DecompositionMode mode{/*donor=*/true, /*mediator=*/false, /*receiver=*/true};
 
   // Reads an <energy_transfer> input block: binning=lin|log|custom,
   // num_shells=, shell_edges= set a default binning shared by all three
@@ -101,11 +93,11 @@ struct ShellTransferConfig {
   // own _num_shells=/_shell_edges=) override just that one axis when
   // present, falling back to the shared default otherwise. terms=UUA,BBA,BUT
   // is a plain comma-separated name list (no per-term mode suffix); mode=
-  // (full/by_sender/by_receiver/total/full_mediator/by_sender_mediator/
-  // by_receiver_mediator/mediator_only, default full) sets the one
-  // DecompositionMode shared by all of them. Does NOT read spectra= --
-  // that's a separate, independent concern, see spectra.hpp's
-  // ParseSpectrumNames.
+  // is a comma-separated list of which axes are decomposed, any subset of
+  // donor/mediator/receiver in any order (default "donor,receiver"; an
+  // empty list means no axis is decomposed, i.e. one global number per
+  // term). Does NOT read spectra= -- that's a separate, independent
+  // concern, see spectra.hpp's ParseSpectrumNames.
   static ShellTransferConfig FromInput(parthenon::ParameterInput *pin);
 };
 

@@ -153,12 +153,10 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   const int n_donor_shells = static_cast<int>(donor_edges.size()) - 1;
   const int n_mediator_shells = static_cast<int>(mediator_edges.size()) - 1;
   const int n_receiver_shells = static_cast<int>(receiver_edges.size()) - 1;
-  const Real collapsed_donor_low = donor_edges.front();
-  const Real collapsed_donor_high = donor_edges.back();
-  const Real collapsed_mediator_low = mediator_edges.front();
-  const Real collapsed_mediator_high = mediator_edges.back();
-  const Real collapsed_receiver_low = receiver_edges.front();
-  const Real collapsed_receiver_high = receiver_edges.back();
+  // Bounds an axis gets when it isn't decomposed: an exact no-op restriction
+  // (every mode passes, k=0 included), identical on all three axes.
+  const ShellRestriction no_restriction{false, kNoRestrictionKLow,
+                                        NoRestrictionKHigh(Nx, Ny, Nz)};
 
   const auto qnames = QuantityNamesForTerms(cfg.terms);
   const auto tags = BaseFieldClosure(qnames);
@@ -262,6 +260,10 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   }
 
   GlobalAux aux;
+  // Always available, so an undecomposed donor/receiver axis can skip the
+  // shell-filter round trip entirely and hand W straight back (see
+  // registry.cpp's WFilter/FilterVector).
+  aux.W_flat = W_flat;
   if (needs_b) {
     auto mag = fields.mag;
     aux.b_flat = parthenon::ParArray1D<Real>("b_flat", 3 * fft_size_inbox);
@@ -361,41 +363,38 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   }
 
   for (int qi = 0; qi < n_q; qi++) {
-    const Real q_low = q_resolved ? donor_edges[qi] : collapsed_donor_low;
-    const Real q_high = q_resolved ? donor_edges[qi + 1] : collapsed_donor_high;
+    const ShellRestriction donor =
+        q_resolved ? ShellRestriction{true, donor_edges[qi], donor_edges[qi + 1]} : no_restriction;
     for (int mi = 0; mi < n_m; mi++) {
-      const Real m_low = m_resolved ? mediator_edges[mi] : collapsed_mediator_low;
-      const Real m_high = m_resolved ? mediator_edges[mi + 1] : collapsed_mediator_high;
+      const ShellRestriction mediator =
+          m_resolved ? ShellRestriction{true, mediator_edges[mi], mediator_edges[mi + 1]}
+                     : no_restriction;
       if (report_progress) {
         std::cout << "energy_transfer: donor shell " << (qi + 1) << "/" << n_q << " (k in ("
-                  << q_low << ", " << q_high << "]), mediator shell " << (mi + 1) << "/" << n_m
-                  << " (k in (" << m_low << ", " << m_high << "]) -- sweeping " << n_k
-                  << " receiver shell(s) x " << cfg.terms.size() << " term(s)" << std::endl;
+                  << donor.low << ", " << donor.high << "]), mediator shell " << (mi + 1) << "/"
+                  << n_m << " (k in (" << mediator.low << ", " << mediator.high
+                  << "]) -- sweeping " << n_k << " receiver shell(s) x " << cfg.terms.size()
+                  << " term(s)" << std::endl;
       }
 
       std::map<std::string, parthenon::ParArray1D<Real>> q_side_bufs;
       for (auto &qname : split_names.q_side) {
         ShellWorkspace ws = ws_template;
-        ws.k_low = q_low;
-        ws.k_high = q_high;
-        ws.mediator_active = m_resolved;
-        ws.m_low = m_low;
-        ws.m_high = m_high;
+        ws.axis = donor;
+        ws.mediator = mediator;
         q_side_bufs.emplace(qname, quantity_table.at(qname).fn(ws));
       }
 
       for (int ki = 0; ki < n_k; ki++) {
-        const Real k_low = k_resolved ? receiver_edges[ki] : collapsed_receiver_low;
-        const Real k_high = k_resolved ? receiver_edges[ki + 1] : collapsed_receiver_high;
+        const ShellRestriction receiver =
+            k_resolved ? ShellRestriction{true, receiver_edges[ki], receiver_edges[ki + 1]}
+                       : no_restriction;
 
         std::map<std::string, parthenon::ParArray1D<Real>> k_side_bufs;
         for (auto &kname : split_names.k_side) {
           ShellWorkspace ws = ws_template;
-          ws.k_low = k_low;
-          ws.k_high = k_high;
-          ws.mediator_active = m_resolved;
-          ws.m_low = m_low;
-          ws.m_high = m_high;
+          ws.axis = receiver;
+          ws.mediator = mediator;
           k_side_bufs.emplace(kname, quantity_table.at(kname).fn(ws));
         }
 
@@ -418,25 +417,6 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
 
 namespace {
 
-// Named tokens covering all 2^3 donor/mediator/receiver resolved-vs-
-// collapsed combinations, for the single energy_transfer/mode= input key
-// (shared by every term in energy_transfer/terms=). The four non-"_mediator"
-// names are the legacy tokens (mediator always collapsed, matching behavior
-// before mediator decomposition existed); the "_mediator"/"mediator_only"
-// names add the mediator axis.
-DecompositionMode ParseDecompositionMode(const std::string &s) {
-  if (s == "full") return DecompositionMode::Full();
-  if (s == "by_sender") return DecompositionMode::BySender();
-  if (s == "by_receiver") return DecompositionMode::ByReceiver();
-  if (s == "total") return DecompositionMode::Total();
-  if (s == "full_mediator") return DecompositionMode::FullWithMediator();
-  if (s == "by_sender_mediator") return DecompositionMode::BySenderWithMediator();
-  if (s == "by_receiver_mediator") return DecompositionMode::ByReceiverWithMediator();
-  if (s == "mediator_only") return DecompositionMode::MediatorOnly();
-  PARTHENON_FAIL("energy_transfer: unknown decomposition mode '" + s + "'");
-  return DecompositionMode::Full();
-}
-
 std::vector<std::string> SplitCommaList(const std::string &s) {
   std::vector<std::string> out;
   std::stringstream ss(s);
@@ -445,6 +425,28 @@ std::vector<std::string> SplitCommaList(const std::string &s) {
     if (!token.empty()) out.push_back(token);
   }
   return out;
+}
+
+// energy_transfer/mode= is just the set of axes that are decomposed: any
+// subset of donor/mediator/receiver, in any order. An empty list decomposes
+// nothing (one global number per term); "donor,receiver" is the default.
+DecompositionMode ParseDecompositionMode(const std::string &s) {
+  DecompositionMode mode{false, false, false};
+  for (const auto &axis : SplitCommaList(s)) {
+    if (axis == "donor") {
+      mode.donor_resolved = true;
+    } else if (axis == "mediator") {
+      mode.mediator_resolved = true;
+    } else if (axis == "receiver") {
+      mode.receiver_resolved = true;
+    } else {
+      PARTHENON_FAIL(("energy_transfer: unknown mode axis '" + axis +
+                      "' -- energy_transfer/mode= takes any comma-separated subset of "
+                      "donor, mediator, receiver")
+                         .c_str());
+    }
+  }
+  return mode;
 }
 
 BinningSpec ParseBinningSpecFromKeys(parthenon::ParameterInput *pin,
@@ -501,7 +503,7 @@ ShellTransferConfig ShellTransferConfig::FromInput(parthenon::ParameterInput *pi
   const auto terms_str = pin->GetOrAddString("energy_transfer", "terms", "UUA,UUC");
   cfg.terms = SplitCommaList(terms_str);
 
-  const auto mode_str = pin->GetOrAddString("energy_transfer", "mode", "full");
+  const auto mode_str = pin->GetOrAddString("energy_transfer", "mode", "donor,receiver");
   cfg.mode = ParseDecompositionMode(mode_str);
 
   return cfg;

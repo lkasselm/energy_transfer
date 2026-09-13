@@ -18,6 +18,14 @@ int ComponentWavenumber(const std::array<int, 3> &kji_vec, const int dir) {
   return kji_vec[2 - dir];
 }
 
+// The (k_low, k_high] pair that makes a ShellFilter/ShellFilterDerivative
+// call an exact no-op restriction -- every mode passes through unchanged,
+// k=0 (DC) included. The low bound has to be strictly negative: the filter
+// test is `k_mag > k_low`, so a k_low of 0 would drop the DC mode.
+// NoRestrictionKHigh's Nx+Ny+Nz is comfortably larger than any true |k|.
+constexpr Real kNoRestrictionKLow = -1.0;
+inline Real NoRestrictionKHigh(int Nx, int Ny, int Nz) { return Real(Nx + Ny + Nz); }
+
 // Shell-filters a field in Fourier space and IFFTs to real space. Extracts
 // modes with k_low < |k| <= k_high. FT_field/FT_scratch are n_comp *
 // fft_size_outbox; real_out is n_comp * fft_size_inbox.

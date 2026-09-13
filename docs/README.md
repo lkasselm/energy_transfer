@@ -147,11 +147,13 @@ request a bundle the same way as any other spectrum:
 `spec_B_compressive` etc. names are not separately requestable.
 
 `DecompositionMode{donor_resolved, mediator_resolved, receiver_resolved}` (a
-plain struct, `ShellTransferConfig::mode`'s default is `DecompositionMode::Full()`)
-controls which of the three shell axes are resolved per-shell vs collapsed
-to the whole domain -- collapsing an axis skips that axis's per-shell loop
-entirely rather than summing a full matrix after the fact, so e.g. `Total()`
-is O(1) in the number of shells, not O(n_shells^2). **`mode` applies to
+plain struct of three bools -- just pick which axes are decomposed; the
+default is `{true, false, true}`) controls which of the three shell axes are
+resolved per-shell vs collapsed to the whole domain -- collapsing an axis
+skips that axis's per-shell loop entirely rather than summing a full matrix
+after the fact, so decomposing nothing (`{false, false, false}`, one global
+number per term) is O(1) in the number of shells, not O(n_shells^2).
+**`mode` applies to
 every term in `ShellTransferConfig::terms` -- it is not per-term.** This is
 deliberate: it lets `ComputeEnergyTransfer` share one `(Q,M,K)` shell sweep
 across all requested terms instead of a separate sweep per term, which is
@@ -165,12 +167,14 @@ cache and caused real OOMs on long sweeps.
 "Donor" (Q) and "receiver" (K) are the fields shell-filtered on each side of
 a term's dot product; "mediator" is the field each side's derived quantity
 reads directly to relate them (e.g. the advecting velocity `U` in `UUA`, or
-the tension field `b` in `BUT`) -- normally read full/unfiltered, but can
-optionally be shell-restricted too. Static factories cover all eight
-combinations: `Full()`/`BySender()`/`ByReceiver()`/`Total()` (mediator
-always collapsed -- the only four that existed before mediator
-decomposition), and `FullWithMediator()`/`BySenderWithMediator()`/
-`ByReceiverWithMediator()`/`MediatorOnly()` (mediator also resolved). Not
+the tension field `b` in `BUT`). All three axes are on equal footing, in the
+API and in the implementation: each is independently decomposed or not, and
+"not decomposed" means exactly the same thing on each of them -- the field
+passes through completely unfiltered (`k=0` included) at zero extra FFT
+cost, rather than being filtered against a whole-domain band. Internally
+that's one `ShellRestriction{active, low, high}` per axis, fed to one shared
+`FilterVector`/`FilterScalar` pair (`src/registry.cpp`); no axis has a
+special code path. Not
 every term has a decomposable mediator -- some terms' only mediator is a
 scalar normalization (density, via `sqrt(rho)` scaling) rather than a field
 being transported, and setting `mode.mediator_resolved=true` while `terms`
@@ -182,10 +186,11 @@ for every term, since `mode` is shared -- with `n_m == 1` whenever
 `mode.mediator_resolved == false`.
 
 Input-file keys: `terms=` is a plain comma-separated name list (no per-term
-suffix), e.g. `terms=UUA,BBA,BUT`; `mode=` sets the one `DecompositionMode`
-shared by all of them -- `full` (default), `by_sender`, `by_receiver`,
-`total`, or the mediator-resolving variants `full_mediator`,
-`by_sender_mediator`, `by_receiver_mediator`, `mediator_only`.
+suffix), e.g. `terms=UUA,BBA,BUT`; `mode=` lists which axes are decomposed --
+any comma-separated subset of `donor`, `mediator`, `receiver`, in any order.
+`mode = donor,receiver` is the default; `mode = donor,mediator,receiver`
+decomposes all three; an empty `mode =` decomposes none, giving one global
+number per term.
 
 `binning=`/`num_shells=`/`shell_edges=` (unprefixed, unchanged) set a
 default binning shared by donor/mediator/receiver, exactly as before

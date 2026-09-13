@@ -135,14 +135,16 @@ shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0
 #   compute_FU=false   -> (omitted)
 terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU
 
-# One DecompositionMode shared by every term listed above (not per-term):
-# full/by_sender/by_receiver/total, or the .../*_mediator/mediator_only
-# variants that also shell-decompose the mediating field -- see
-# docs/README.md. Defaults to "full" if omitted. If mode is one of the
-# *_mediator/mediator_only variants, every term above must have a
-# decomposable mediator (PU and FU don't -- their mediator is a scalar rho
-# normalization) or the whole run fails immediately.
-# mode = full
+# Which shell axes are decomposed, shared by every term listed above (not
+# per-term): any comma-separated subset of donor, mediator, receiver, in any
+# order. Defaults to "donor,receiver" if omitted. An axis left out isn't
+# filtered at all -- the field passes straight through (k=0 included), the
+# same way on all three axes -- so an empty "mode =" gives one global number
+# per term at minimal cost. Each decomposed axis uses its own binning from
+# above. If mediator is listed, every term above must have a decomposable
+# mediator (PU and FU don't -- their mediator is a scalar rho normalization)
+# or the whole run fails immediately. See docs/README.md.
+# mode = donor,receiver
 
 # --- Spectra ---
 # spec_U/spec_rho/spec_W/spec_B are the plain power spectra of velocity,

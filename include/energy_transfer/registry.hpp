@@ -31,18 +31,38 @@ struct FourierFields {
   parthenon::ParArray1D<Kokkos::complex<Real>> FT_b; // FT of b = mag / sqrt(rho)
 };
 
-// Global (shell-independent) auxiliary real-space arrays, lazily computed
-// once per ComputeShellTransfer call when some requested quantity's
+// Global (shell-independent) auxiliary real-space arrays. W_flat is always
+// populated (FT_W is too); the rest are lazily computed once per
+// ComputeEnergyTransfer call when some requested quantity's
 // required_base_fields names them ("b"/"DivU"/"Divb").
 struct GlobalAux {
+  parthenon::ParArray1D<Real> W_flat; // W = sqrt(rho) * velocity
   parthenon::ParArray1D<Real> b_flat; // b = mag / sqrt(rho)
   parthenon::ParArray1D<Real> DivU;   // div(velocity)
   parthenon::ParArray1D<Real> Divb;   // div(b)
 };
 
+// One axis's shell restriction: which modes pass a ShellFilter/
+// ShellFilterDerivative call. When active, that's the half-open band
+// (low, high]; when not, low/high still hold the exact no-restriction
+// sentinel (kNoRestrictionKLow, NoRestrictionKHigh(Nx,Ny,Nz) -- see
+// spectral_kernels.hpp) so any code path that just passes them through
+// stays correct, while a provider that can skip the filtering entirely
+// checks `active` and returns the raw field (see FilterVector/FilterScalar
+// in registry.cpp), paying zero extra FFT cost.
+struct ShellRestriction {
+  bool active = false;
+  Real low = 0.0, high = 0.0;
+};
+
 // Everything a derived-quantity provider needs to compute one shell's worth
 // of a real-space quantity. fields->mom_or_vel/pres_or_energy are already in
 // primitive form (ConvertConservedToPrimitive has already run).
+//
+// The two ShellRestrictions below are deliberately the same type with the
+// same contract: donor, receiver, and mediator are all on equal footing, and
+// "this axis isn't being decomposed" means the same exact, DC-inclusive,
+// zero-extra-cost thing on each of them.
 struct ShellWorkspace {
   parthenon::FFTManager *fft_mgr;
   const FlatFields *fields;
@@ -50,18 +70,12 @@ struct ShellWorkspace {
   const GlobalAux *aux;
   std::size_t fft_size_inbox;
   std::size_t fft_size_outbox;
-  int Nx, Ny, Nz;     // global mesh dims -- used as the "no shell restriction" sentinel k_high
+  int Nx, Ny, Nz; // global mesh dims
   Real two_pi_over_L;
-  Real k_low, k_high; // this shell's bounds (or the whole-domain range for a collapsed side)
 
-  // Mediator shell restriction. mediator_active is false (the common case,
-  // matching DecompositionMode::mediator_resolved == false) whenever no
-  // filtering should happen at all -- a derived-quantity provider must check
-  // it and skip straight to the raw field, not just compare m_low/m_high
-  // against a sentinel, so the unrestricted case pays zero extra FFT cost
-  // (see FilterMediatorVector/FilterMediatorScalar in registry.cpp).
-  bool mediator_active = false;
-  Real m_low = 0.0, m_high = 0.0;
+  ShellRestriction axis;     // this quantity's own donor-or-receiver shell
+                            // (whichever of the two this call is evaluating)
+  ShellRestriction mediator; // the shell of the mediating field it reads
 };
 
 // Always returns a 3*fft_size_inbox vector (scalar quantities are broadcast
