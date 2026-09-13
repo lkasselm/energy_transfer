@@ -19,4 +19,8 @@ target_link_libraries(test_refactor_baseline PRIVATE energy_transfer Parthenon::
 add_test(NAME refactor_baseline COMMAND test_refactor_baseline -i ${CMAKE_CURRENT_SOURCE_DIR}/synthetic.in
          --golden ${CMAKE_CURRENT_SOURCE_DIR}/refactor_baseline_golden.txt)
 
+add_executable(test_helicity_smoke test_helicity_smoke.cpp)
+target_link_libraries(test_helicity_smoke PRIVATE energy_transfer Parthenon::parthenon MPI::MPI_CXX)
+add_test(NAME helicity_smoke COMMAND test_helicity_smoke -i ${CMAKE_CURRENT_SOURCE_DIR}/synthetic.in)
+
 add_subdirectory(regression)

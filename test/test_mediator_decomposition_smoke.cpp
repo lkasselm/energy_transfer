@@ -20,7 +20,7 @@ using parthenon::Real;
 
 namespace {
 
-enum { IDN = 0, IV1 = 1, IV2 = 2, IV3 = 3, IPR = 4, NPRIM = 5 };
+enum { IDN = 0, IV1 = 1, IV2 = 2, IV3 = 3, IPR = 4, IB1 = 5, IB2 = 6, IB3 = 7, NPRIM = 8 };
 
 parthenon::Packages_t ProcessPackages(std::unique_ptr<parthenon::ParameterInput> &) {
   parthenon::Packages_t packages;
@@ -36,14 +36,15 @@ parthenon::Packages_t ProcessPackages(std::unique_ptr<parthenon::ParameterInput>
 } // namespace
 
 // Single-rank smoke test for DecompositionMode::mediator_resolved: checks
-// (1) a mediator-decomposed UUA matrix has the expected 3D (n_q, n_m, n_k)
-// shape and is finite, (2) summing it over the mediator axis reproduces the
-// non-mediator-decomposed result -- U_dot_grad_W is linear in its U
-// mediator, and shells partition Fourier space, so shell-filtering U into
-// n_shells pieces and summing must reconstruct the unfiltered-U result
-// exactly (up to floating point), and (3) requesting mediator decomposition
-// on a term with no decomposable mediator (PU, whose only mediator is a
-// rho scaling) throws rather than silently ignoring the request.
+// (1) mediator-decomposed UUA and H matrices (both linear in their U
+// mediator -- U_dot_grad_W and U_cross_B respectively) have the expected 3D
+// (n_q, n_m, n_k) shape and are finite, (2) summing each over the mediator
+// axis reproduces its non-mediator-decomposed result -- shells partition
+// Fourier space, so shell-filtering U into n_shells pieces and summing must
+// reconstruct the unfiltered-U result exactly (up to floating point), and
+// (3) requesting mediator decomposition on a term with no decomposable
+// mediator (PU, whose only mediator is a rho scaling) throws rather than
+// silently ignoring the request.
 int main(int argc, char *argv[]) {
   parthenon::ParthenonManager pman;
   pman.app_input->ProcessPackages = ProcessPackages;
@@ -64,6 +65,10 @@ int main(int argc, char *argv[]) {
                               0.5 * Kokkos::sin(2.0 * M_PI * 5 * i / Real(Nx));
           prim(IV2, k, j, i) = 0.3 * Kokkos::cos(2.0 * M_PI * 2 * j / Real(Nx));
           prim(IV3, k, j, i) = 0.0;
+          prim(IB1, k, j, i) = 0.2 * Kokkos::cos(2.0 * M_PI * 1 * i / Real(Nx)) +
+                              0.1 * Kokkos::sin(2.0 * M_PI * 2 * k / Real(Nx));
+          prim(IB2, k, j, i) = 0.15 * Kokkos::sin(2.0 * M_PI * 3 * j / Real(Nx));
+          prim(IB3, k, j, i) = 0.1 * Kokkos::cos(2.0 * M_PI * 2 * i / Real(Nx));
         });
   };
 
@@ -79,45 +84,55 @@ int main(int argc, char *argv[]) {
     auto *pmesh = pman.pmesh.get();
     auto &md = pmesh->mesh_data.Get();
     auto spec = energy_transfer::MakeAthenaPKPrimitiveLiveSpec(IDN, IV1, IV2, IV3, IPR,
-                                                                /*has_bfield=*/false);
+                                                                /*has_bfield=*/true, IB1, IB2, IB3);
     auto fields = energy_transfer::GatherLiveFields(pmesh, md.get(), spec);
     energy_transfer::ConvertConservedToPrimitive(fields);
+
+    // UUA (mediator U, own field W) and H (mediator U, own field B) are both
+    // linear in their U mediator, so this identity applies to both the same
+    // way.
+    const std::vector<std::string> mediator_linear_terms = {"UUA", "H"};
 
     energy_transfer::ShellTransferConfig cfg_plain;
     cfg_plain.donor_binning = cfg_plain.mediator_binning = cfg_plain.receiver_binning =
         energy_transfer::BinningSpec::Linear(4);
-    cfg_plain.terms = {"UUA"};
+    cfg_plain.terms = mediator_linear_terms;
     cfg_plain.mode = energy_transfer::DecompositionMode{true, false, true};
     auto res_plain = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg_plain);
 
     energy_transfer::ShellTransferConfig cfg_mediator;
     cfg_mediator.donor_binning = cfg_mediator.mediator_binning = cfg_mediator.receiver_binning =
         energy_transfer::BinningSpec::Linear(4);
-    cfg_mediator.terms = {"UUA"};
+    cfg_mediator.terms = mediator_linear_terms;
     cfg_mediator.mode = energy_transfer::DecompositionMode{true, true, true};
     auto res_mediator = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg_mediator);
 
-    bool shape_ok = false, all_finite = true, sums_match = true;
+    bool shape_ok = true, all_finite = true, sums_match = true;
     Real max_abs_diff = 0.0;
-    if (res_plain.matrices.count("UUA") == 1 && res_mediator.matrices.count("UUA") == 1) {
-      const auto &plain = res_plain.matrices.at("UUA");
-      const auto &med = res_mediator.matrices.at("UUA");
-      shape_ok = plain.extent(0) == 4 && plain.extent(1) == 1 && plain.extent(2) == 4 &&
-                med.extent(0) == 4 && med.extent(1) == 4 && med.extent(2) == 4;
-      if (shape_ok) {
-        for (int qi = 0; qi < 4; qi++) {
-          for (int ki = 0; ki < 4; ki++) {
-            Real summed = 0.0;
-            for (int mi = 0; mi < 4; mi++) {
-              const Real v = med(qi, mi, ki);
-              if (!std::isfinite(v)) all_finite = false;
-              summed += v;
-            }
-            const Real plain_val = plain(qi, 0, ki);
-            const Real diff = std::abs(summed - plain_val);
-            max_abs_diff = std::max(max_abs_diff, diff);
-            if (diff > 1e-8 * std::max(std::abs(plain_val), Real(1.0))) sums_match = false;
+    for (auto &term_name : mediator_linear_terms) {
+      if (res_plain.matrices.count(term_name) != 1 || res_mediator.matrices.count(term_name) != 1) {
+        shape_ok = false;
+        continue;
+      }
+      const auto &plain = res_plain.matrices.at(term_name);
+      const auto &med = res_mediator.matrices.at(term_name);
+      const bool this_shape_ok = plain.extent(0) == 4 && plain.extent(1) == 1 &&
+                                 plain.extent(2) == 4 && med.extent(0) == 4 &&
+                                 med.extent(1) == 4 && med.extent(2) == 4;
+      shape_ok = shape_ok && this_shape_ok;
+      if (!this_shape_ok) continue;
+      for (int qi = 0; qi < 4; qi++) {
+        for (int ki = 0; ki < 4; ki++) {
+          Real summed = 0.0;
+          for (int mi = 0; mi < 4; mi++) {
+            const Real v = med(qi, mi, ki);
+            if (!std::isfinite(v)) all_finite = false;
+            summed += v;
           }
+          const Real plain_val = plain(qi, 0, ki);
+          const Real diff = std::abs(summed - plain_val);
+          max_abs_diff = std::max(max_abs_diff, diff);
+          if (diff > 1e-8 * std::max(std::abs(plain_val), Real(1.0))) sums_match = false;
         }
       }
     }
@@ -171,7 +186,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (parthenon::Globals::my_rank == 0) {
-      std::cout << "UUA mediator-sum vs plain: max_abs_diff=" << max_abs_diff << std::endl;
+      std::cout << "UUA/H mediator-sum vs plain: max_abs_diff=" << max_abs_diff << std::endl;
       std::cout << "UUA collapsed-donor vs whole-range custom band: max_abs_diff="
                 << max_donor_diff << std::endl;
       if (shape_ok && all_finite && sums_match && pu_rejected && donor_collapse_ok) {

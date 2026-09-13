@@ -129,6 +129,27 @@ parthenon::ParArray1D<Real> UdotGradB(const ShellWorkspace &ws) {
   return out;
 }
 
+// Magnetic helicity transfer mediator quantity: U x B_Q (own field is B,
+// filtered to ws.axis; mediator is U, filtered to ws.mediator) -- see the
+// "H" term below, e.g. doi:10.1017/jfm.2021.496 eq. (4.1). Linear in U, so
+// (like U_dot_grad_W/U_dot_grad_B) shell-decomposing the mediator and
+// summing over shells reconstructs the unfiltered-mediator result exactly.
+parthenon::ParArray1D<Real> UCrossB(const ShellWorkspace &ws) {
+  const auto n = ws.fft_size_inbox;
+  auto out = AllocVec("UCrossB", n);
+  auto B = FilterVector(ws, ws.axis, "UCrossB_B", ws.ft->FT_B, ws.fields->mag);
+  auto U = FilterVector(ws, ws.mediator, "UCrossB_U_med", ws.ft->FT_U, ws.fields->mom_or_vel);
+  parthenon::par_for(
+      "UCrossB", std::size_t(0), n - 1, KOKKOS_LAMBDA(const std::size_t idx) {
+        const Real Ux = U(0 * n + idx), Uy = U(1 * n + idx), Uz = U(2 * n + idx);
+        const Real Bx = B(0 * n + idx), By = B(1 * n + idx), Bz = B(2 * n + idx);
+        out(0 * n + idx) = Uy * Bz - Uz * By;
+        out(1 * n + idx) = Uz * Bx - Ux * Bz;
+        out(2 * n + idx) = Ux * By - Uy * Bx;
+      });
+  return out;
+}
+
 parthenon::ParArray1D<Real> BDotGradB(const ShellWorkspace &ws) {
   const auto n = ws.fft_size_inbox;
   auto out = AllocVec("bDotGradB", n);
@@ -364,6 +385,8 @@ const std::map<std::string, DerivedQuantity> &BuiltinQuantities() {
       // Mediator is B -- FT_B is already required, so no extra tag needed.
       {"grad_BdotBQ_scaled", {{"B"}, {}, true, &GradBdotBQScaled}},
       {"B_times_mag", {{"B"}, {}, true, &BTimesMag}},
+      // Mediator is U -- own field is B, same shape as U_dot_grad_B.
+      {"U_cross_B", {{"B"}, {"U"}, true, &UCrossB}},
   };
   return table;
 }
@@ -382,6 +405,9 @@ const std::map<std::string, TransferTerm> &BuiltinTerms() {
       {"UBPbb", {"Div_WOverSqrtRho_broadcast", "B_times_mag", -1.0}},
       {"PU", {"grad_P_over_sqrt_rho", "W_filter", -1.0}},
       {"FU", {"Acc_filter_times_sqrt_rho", "W_filter", 1.0}},
+      // T_H(Q,K) = 2 * <B_filter_K, U_cross_B_Q> -- magnetic helicity
+      // transfer, e.g. doi:10.1017/jfm.2021.496 eq. (4.1).
+      {"H", {"U_cross_B", "B_filter", 2.0}},
   };
   return table;
 }

@@ -53,14 +53,26 @@ void SpectralDivergence(parthenon::FFTManager *fft_mgr,
                         parthenon::ParArray1D<Kokkos::complex<Real>> &FT_scratch,
                         parthenon::ParArray1D<Real> &div_out, Real two_pi_over_L);
 
-// Bins an already-Fourier-transformed field into a power spectrum by |k|,
-// matching parthenon::utils::fft::CalcSpectrum's exact convention (same
+// Bins the real part of the per-mode Hermitian inner product
+// Re(sum_c FT_a[c] * conj(FT_b[c])) by |k|, matching
+// parthenon::utils::fft::CalcSpectrum's exact binning convention (same
 // num_bins = ceil(k_max)+1, same floor(|k|) bin index, same
 // Hermitian-doubling factor for r2c-redundant modes, same MPI_Reduce to rank
-// 0) -- for a field that is already in Fourier space (this library's own
-// FT_U/FT_B/etc., or energy_transfer::DecomposedFourierField's output)
-// rather than a Mesh variable CalcSpectrum would forward-transform itself.
-// FT_field is n_comp * size_fourier_space_box().
+// 0) -- for fields already in Fourier space (this library's own FT_U/FT_B/
+// etc.) rather than Mesh variables CalcSpectrum would forward-transform
+// itself. FT_a/FT_b are each n_comp * size_fourier_space_box().
+//
+// BinFourierSpectrum(pm, F, n) is exactly the FT_b == FT_a special case
+// (sum_c |F[c]|^2, an ordinary power spectrum); this is the general
+// *co*-spectrum of two different fields -- e.g. energy_transfer::helicity's
+// (signed) magnetic helicity spectrum Re(<A_hat, B_hat>). Unlike a power
+// spectrum, a co-spectrum's bins can be negative -- nothing downstream
+// (WriteResult's "<name>_pow_sum" record) assumes otherwise.
+parthenon::ParArray2D<parthenon::utils::fft::SpecReal>
+BinFourierCospectrum(parthenon::Mesh *pm,
+                     const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_a,
+                     const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_b, int n_comp);
+
 parthenon::ParArray2D<parthenon::utils::fft::SpecReal>
 BinFourierSpectrum(parthenon::Mesh *pm,
                   const parthenon::ParArray1D<Kokkos::complex<Real>> &FT_field, int n_comp);

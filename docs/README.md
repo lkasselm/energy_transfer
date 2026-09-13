@@ -112,7 +112,7 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
 
 ### Built-in terms
 
-`UUA, UUC, BBA, BBC, BUT, UBTb, UBTbA, UBTbC, BUPbb, UBPbb, PU, FU` (see
+`UUA, UUC, BBA, BBC, BUT, UBTb, UBTbA, UBTbC, BUPbb, UBPbb, PU, FU, H` (see
 `docs/plan.md` for their physical meaning) plus spectra `spec_U, spec_rho,
 spec_W, spec_B`, and a directionally-decomposed variant of each vector field
 requested via a single bundle name -- `spec_U_decomp`, `spec_W_decomp`,
@@ -145,6 +145,28 @@ request a bundle the same way as any other spectrum:
 `spectra = spec_U,spec_B_decomp` (see
 `tools/energy_transfer_offline/parthinput.example`) -- the individual
 `spec_B_compressive` etc. names are not separately requestable.
+
+Two more spectra, both needing the magnetic field and both implemented in
+`include/energy_transfer/helicity.hpp`/`src/helicity.cpp` (a small,
+standalone module -- `CalcHelicity(pm, B)` is usable on its own outside the
+spectra machinery, e.g. by an in-situ app wanting the raw real-space field
+to `ScatterField` back into its own mesh, the way
+`athenapk/src/pgen/decaying_turbulence.cpp` computes it inline today):
+- `spec_helicity` -- the *signed* magnetic helicity spectrum,
+  `Re(Â(k)·B̂*(k))` binned by `|k|`, where `Â` is the Coulomb-gauge vector
+  potential reconstructed spectrally from `B̂` (`Â = i(k×B̂)/|k|²`, zero at
+  `k=0`). This is a **co-spectrum** of two different fields (`Â` and `B̂`),
+  not an ordinary power spectrum -- its bins can be negative, and by
+  Parseval it sums to the real-space total helicity `∫A·B dV`. Computed via
+  `include/energy_transfer/spectral_kernels.hpp`'s `BinFourierCospectrum`, a
+  generic already-in-Fourier-space co-spectrum binning utility of which
+  `BinFourierSpectrum` (used for every other spectrum in this library) is
+  just the special case of a field against itself.
+- `spec_helicity_variance` -- the ordinary power spectrum of the real-space
+  scalar field `H(x) = A(x)·B(x)` itself (`CalcSpectrum(H, 1)`) -- measures
+  the spatial fluctuation scale of local helicity density, a genuinely
+  different quantity from `spec_helicity` above (which measures how much of
+  the *total* helicity resides at each `k`).
 
 `DecompositionMode{donor_resolved, mediator_resolved, receiver_resolved}` (a
 plain struct of three bools -- just pick which axes are decomposed; the

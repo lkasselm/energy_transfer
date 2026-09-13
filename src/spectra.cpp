@@ -7,11 +7,21 @@
 #include <utils/error_checking.hpp>
 
 #include "energy_transfer/decomposition.hpp"
+#include "energy_transfer/helicity.hpp"
 #include "energy_transfer/spectral_kernels.hpp"
 
 namespace energy_transfer {
 
 namespace {
+
+// "spec_helicity"/"spec_helicity_variance" don't fit the field-selector
+// table below (that pattern is "pick one field, call CalcSpectrum"; these
+// need the vector-potential machinery in helicity.hpp and, for
+// spec_helicity, a co-spectrum of two different Fourier fields) -- they're
+// handled as two explicit names instead, checked before the table lookup.
+bool IsHelicitySpectrumName(const std::string &name) {
+  return name == "spec_helicity" || name == "spec_helicity_variance";
+}
 
 // ---- Field selectors -----------------------------------------------------
 // The only code that knows a spectrum name refers to a particular field --
@@ -116,7 +126,10 @@ ComputeDecomposedSpectrumBundle(parthenon::Mesh *pm, const std::string &base_nam
 
 } // namespace
 
-bool SpectrumNeedsMag(const std::string &name) { return LookupSpectrum(name).needs_mag; }
+bool SpectrumNeedsMag(const std::string &name) {
+  if (IsHelicitySpectrumName(name)) return true;
+  return LookupSpectrum(name).needs_mag;
+}
 
 std::vector<std::string> ParseSpectrumNames(parthenon::ParameterInput *pin) {
   const auto spectra_str = pin->GetOrAddString("energy_transfer", "spectra", "spec_U");
@@ -150,6 +163,23 @@ ComputeSpectra(parthenon::Mesh *pm, const FlatFields &fields,
 
   std::map<std::string, parthenon::HostArray2D<TransferReal>> result;
   for (auto &name : spectrum_names) {
+    if (name == "spec_helicity") {
+      PARTHENON_REQUIRE_THROWS(fields.mag.size() > 0,
+                               "energy_transfer: spec_helicity needs the magnetic field.");
+      auto vp = ComputeVectorPotentialFourier(pm, fields.mag);
+      result.emplace(name,
+                     BinFourierCospectrum(pm, vp.FT_A, vp.FT_B, 3).GetHostMirrorAndCopy());
+      continue;
+    }
+    if (name == "spec_helicity_variance") {
+      PARTHENON_REQUIRE_THROWS(
+          fields.mag.size() > 0,
+          "energy_transfer: spec_helicity_variance needs the magnetic field.");
+      auto H = CalcHelicity(pm, fields.mag);
+      result.emplace(name, parthenon::utils::fft::CalcSpectrum(pm, H, 1).GetHostMirrorAndCopy());
+      continue;
+    }
+
     const auto &spec = LookupSpectrum(name);
     const auto &field = spec.select(fields, W_flat);
     if (!HasDecompSuffix(name)) {

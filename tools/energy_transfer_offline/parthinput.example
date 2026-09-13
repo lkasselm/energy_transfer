@@ -165,6 +165,17 @@ terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU
 # true DC power. See include/energy_transfer/decomposition.hpp for the math
 # and conventions. Not yet available for the shell-to-shell transfer terms
 # above, only for spectra.
+#
+# Two more spectra (both need the magnetic field), computed via
+# include/energy_transfer/helicity.hpp:
+# spec_helicity -- the SIGNED magnetic helicity spectrum Re(A_hat . B_hat*)
+# binned by k (A is the Coulomb-gauge vector potential of B). A co-spectrum
+# of two different fields, not an ordinary power spectrum -- its bins can be
+# negative, and it sums (Parseval) to the real-space total helicity.
+# spec_helicity_variance -- the ordinary power spectrum of the real-space
+# helicity density field H(x)=A(x).B(x) itself -- a different quantity from
+# spec_helicity above (fluctuation scale of local helicity, not how much of
+# the total helicity sits at each k).
 spectra = spec_U,spec_rho,spec_W,spec_B
 
 gamma = 1.666667

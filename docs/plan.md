@@ -153,6 +153,7 @@ mode. The other spectra do not perform sanity checks.
 | UBPbb | `-B_K * B * div(W_Q/(2*sqrt(rho)))` | KE -> magnetic pressure |
 | PU   | `-W_K * (1/sqrt(rho)) * grad(P_Q)` | Pressure -> KE |
 | FU   | `+W_K * sqrt(rho) * Acc_Q` | Forcing -> KE |
+| H    | `+2 * B_K . (U x B_Q)` | Magnetic helicity transfer |
 
 ## Key Design Decisions
 
