@@ -327,7 +327,8 @@ your own code.
      energy_transfer::ShellTransferConfig cfg;
      cfg.donor_binning = cfg.mediator_binning = cfg.receiver_binning =
          energy_transfer::BinningSpec::Log(20);
-     cfg.terms = {"UUA", "UUC"}; // mode defaults to Full() -- shared by both terms
+     cfg.terms = {"UUA", "UUC"};
+     cfg.mode = {/*donor=*/true, /*mediator=*/false, /*receiver=*/true}; // the default; shared by both terms
 
      // GatherLiveFields is a cheap, in-memory reshuffle of fields already
      // resident in md -- no file I/O, unlike the offline driver's ingestion.
