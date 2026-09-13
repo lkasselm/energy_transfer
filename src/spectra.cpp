@@ -13,38 +13,81 @@ namespace energy_transfer {
 
 namespace {
 
-// ---- Plain power spectra ------------------------------------------------
+// ---- Field selectors -----------------------------------------------------
+// The only code that knows a spectrum name refers to a particular field --
+// everything downstream (CalcSpectrum, ComputeDecomposedSpectrumBundle) is
+// completely field-agnostic, only caring whether it's a 1- or 3-component
+// real-space array.
 
-parthenon::HostArray2D<TransferReal> SpecU(parthenon::Mesh *pm, const FlatFields &f,
-                                           const parthenon::ParArray1D<Real> & /*W_flat*/) {
-  auto spectra = parthenon::utils::fft::CalcSpectrum(pm, f.mom_or_vel, 3);
-  return spectra.GetHostMirrorAndCopy();
+using FieldSelectorFn = const parthenon::ParArray1D<Real> &(*)(
+    const FlatFields &, const parthenon::ParArray1D<Real> &W_flat);
+
+const parthenon::ParArray1D<Real> &SelectU(const FlatFields &f,
+                                           const parthenon::ParArray1D<Real> &) {
+  return f.mom_or_vel;
 }
-
-parthenon::HostArray2D<TransferReal> SpecRho(parthenon::Mesh *pm, const FlatFields &f,
-                                             const parthenon::ParArray1D<Real> & /*W_flat*/) {
-  auto spectra = parthenon::utils::fft::CalcSpectrum(pm, f.rho, 1);
-  return spectra.GetHostMirrorAndCopy();
+const parthenon::ParArray1D<Real> &SelectRho(const FlatFields &f,
+                                             const parthenon::ParArray1D<Real> &) {
+  return f.rho;
 }
-
-parthenon::HostArray2D<TransferReal> SpecW(parthenon::Mesh *pm, const FlatFields & /*f*/,
+const parthenon::ParArray1D<Real> &SelectW(const FlatFields &,
                                            const parthenon::ParArray1D<Real> &W_flat) {
-  auto spectra = parthenon::utils::fft::CalcSpectrum(pm, W_flat, 3);
-  return spectra.GetHostMirrorAndCopy();
+  return W_flat;
+}
+const parthenon::ParArray1D<Real> &SelectB(const FlatFields &f,
+                                           const parthenon::ParArray1D<Real> &) {
+  return f.mag;
 }
 
-parthenon::HostArray2D<TransferReal> SpecB(parthenon::Mesh *pm, const FlatFields &f,
-                                           const parthenon::ParArray1D<Real> & /*W_flat*/) {
-  auto spectra = parthenon::utils::fft::CalcSpectrum(pm, f.mag, 3);
-  return spectra.GetHostMirrorAndCopy();
+// One row per plain spectrum name -- "<name>_decomp" isn't a separate row;
+// it's parsed (see HasDecompSuffix below) and only valid when decomposable.
+struct Spectrum {
+  FieldSelectorFn select;
+  int n_comp;                 // 1 (scalar) or 3 (vector)
+  bool needs_mag = false;
+  bool decomposable = false;  // "<name>_decomp" valid iff true (only for n_comp==3)
+};
+
+const std::map<std::string, Spectrum> &BuiltinSpectra() {
+  static const std::map<std::string, Spectrum> table = {
+      {"spec_U", {&SelectU, 3, false, true}},
+      {"spec_rho", {&SelectRho, 1, false, false}},
+      {"spec_W", {&SelectW, 3, false, true}},
+      {"spec_B", {&SelectB, 3, true, true}},
+  };
+  return table;
+}
+
+bool HasDecompSuffix(const std::string &name) {
+  static const std::string suffix = "_decomp";
+  return name.size() > suffix.size() &&
+        name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string StripDecompSuffix(const std::string &name) {
+  static const std::string suffix = "_decomp";
+  return name.substr(0, name.size() - suffix.size());
+}
+
+const Spectrum &LookupSpectrum(const std::string &name) {
+  const auto &table = BuiltinSpectra();
+  const auto base = HasDecompSuffix(name) ? StripDecompSuffix(name) : name;
+  auto it = table.find(base);
+  PARTHENON_REQUIRE_THROWS(it != table.end(), "energy_transfer: unknown spectrum '" + name + "'");
+  if (HasDecompSuffix(name)) {
+    PARTHENON_REQUIRE_THROWS(it->second.decomposable, "energy_transfer: '" + name + "' -- '" +
+                                                           base +
+                                                           "' has no direction to decompose");
+  }
+  return it->second;
 }
 
 // ---- Decomposed spectra (compressive / plus / minus, fused with full) --
-// One bundle per vector field (U, W, B); rho is scalar and has no direction
-// to decompose against. Each shares a single Forward() FFT across all four
-// outputs (see decomposition.hpp's DecomposeFourierField) -- there's rarely
-// a reason to request just one direction, and doing so separately would
-// redundantly re-FFT the same field three times over.
+// Shares a single Forward() FFT across all four outputs (see
+// decomposition.hpp's DecomposeFourierField) -- there's rarely a reason to
+// want just one direction, and computing them separately would redundantly
+// re-FFT the same field three times over. Field-agnostic: only needs a
+// 3-component real-space array and the base name to build its 4 output keys.
 
 parthenon::ParArray1D<Kokkos::complex<Real>>
 ForwardTransformVector(parthenon::Mesh *pm, const parthenon::ParArray1D<Real> &field) {
@@ -71,70 +114,9 @@ ComputeDecomposedSpectrumBundle(parthenon::Mesh *pm, const std::string &base_nam
   };
 }
 
-std::map<std::string, parthenon::HostArray2D<TransferReal>>
-SpecUDecomp(parthenon::Mesh *pm, const FlatFields &f, const parthenon::ParArray1D<Real> &) {
-  return ComputeDecomposedSpectrumBundle(pm, "spec_U", f.mom_or_vel);
-}
-
-std::map<std::string, parthenon::HostArray2D<TransferReal>>
-SpecWDecomp(parthenon::Mesh *pm, const FlatFields &, const parthenon::ParArray1D<Real> &W_flat) {
-  return ComputeDecomposedSpectrumBundle(pm, "spec_W", W_flat);
-}
-
-std::map<std::string, parthenon::HostArray2D<TransferReal>>
-SpecBDecomp(parthenon::Mesh *pm, const FlatFields &f, const parthenon::ParArray1D<Real> &) {
-  return ComputeDecomposedSpectrumBundle(pm, "spec_B", f.mag);
-}
-
-// ---- Registry tables (private -- ComputeSpectra/SpectrumNeedsMag are the
-// only public surface; there's no need for callers to see these) ---------
-
-using SpectrumFn = parthenon::HostArray2D<TransferReal> (*)(
-    parthenon::Mesh *, const FlatFields &, const parthenon::ParArray1D<Real> &W_flat);
-struct Spectrum {
-  SpectrumFn fn;
-  bool needs_mag = false;
-};
-
-using SpectrumBundleFn = std::map<std::string, parthenon::HostArray2D<TransferReal>> (*)(
-    parthenon::Mesh *, const FlatFields &, const parthenon::ParArray1D<Real> &W_flat);
-struct SpectrumBundle {
-  SpectrumBundleFn fn;
-  bool needs_mag = false;
-};
-
-const std::map<std::string, Spectrum> &BuiltinSpectra() {
-  static const std::map<std::string, Spectrum> table = {
-      {"spec_U", {&SpecU, false}},
-      {"spec_rho", {&SpecRho, false}},
-      {"spec_W", {&SpecW, false}},
-      {"spec_B", {&SpecB, true}},
-  };
-  return table;
-}
-
-const std::map<std::string, SpectrumBundle> &BuiltinSpectrumBundles() {
-  static const std::map<std::string, SpectrumBundle> table = {
-      {"spec_U_decomp", {&SpecUDecomp, false}},
-      {"spec_W_decomp", {&SpecWDecomp, false}},
-      {"spec_B_decomp", {&SpecBDecomp, true}},
-  };
-  return table;
-}
-
 } // namespace
 
-bool SpectrumNeedsMag(const std::string &name) {
-  const auto &spectrum_table = BuiltinSpectra();
-  auto spec_it = spectrum_table.find(name);
-  if (spec_it != spectrum_table.end()) return spec_it->second.needs_mag;
-
-  const auto &bundle_table = BuiltinSpectrumBundles();
-  auto bundle_it = bundle_table.find(name);
-  PARTHENON_REQUIRE_THROWS(bundle_it != bundle_table.end(),
-                           "energy_transfer: unknown spectrum '" + name + "'");
-  return bundle_it->second.needs_mag;
-}
+bool SpectrumNeedsMag(const std::string &name) { return LookupSpectrum(name).needs_mag; }
 
 std::vector<std::string> ParseSpectrumNames(parthenon::ParameterInput *pin) {
   const auto spectra_str = pin->GetOrAddString("energy_transfer", "spectra", "spec_U");
@@ -166,21 +148,18 @@ ComputeSpectra(parthenon::Mesh *pm, const FlatFields &fields,
       });
   Kokkos::fence();
 
-  const auto &spectrum_table = BuiltinSpectra();
-  const auto &bundle_table = BuiltinSpectrumBundles();
-
   std::map<std::string, parthenon::HostArray2D<TransferReal>> result;
   for (auto &name : spectrum_names) {
-    auto spec_it = spectrum_table.find(name);
-    if (spec_it != spectrum_table.end()) {
-      result.emplace(name, spec_it->second.fn(pm, fields, W_flat));
-      continue;
-    }
-    auto bundle_it = bundle_table.find(name);
-    PARTHENON_REQUIRE_THROWS(bundle_it != bundle_table.end(),
-                             "energy_transfer: unknown spectrum '" + name + "'");
-    for (auto &[sub_name, arr] : bundle_it->second.fn(pm, fields, W_flat)) {
-      result.emplace(sub_name, arr);
+    const auto &spec = LookupSpectrum(name);
+    const auto &field = spec.select(fields, W_flat);
+    if (!HasDecompSuffix(name)) {
+      result.emplace(name, parthenon::utils::fft::CalcSpectrum(pm, field, spec.n_comp)
+                               .GetHostMirrorAndCopy());
+    } else {
+      for (auto &[sub_name, arr] :
+          ComputeDecomposedSpectrumBundle(pm, StripDecompSuffix(name), field)) {
+        result.emplace(sub_name, arr);
+      }
     }
   }
   return result;
