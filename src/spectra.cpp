@@ -23,6 +23,15 @@ bool IsHelicitySpectrumName(const std::string &name) {
   return name == "spec_helicity" || name == "spec_helicity_variance";
 }
 
+// Trims ASCII whitespace from both ends, so "spec_U, spec_B" and
+// "spec_U,spec_B" parse identically.
+std::string Trim(const std::string &s) {
+  const auto first = s.find_first_not_of(" \t\n\r");
+  if (first == std::string::npos) return "";
+  const auto last = s.find_last_not_of(" \t\n\r");
+  return s.substr(first, last - first + 1);
+}
+
 // ---- Field selectors -----------------------------------------------------
 // The only code that knows a spectrum name refers to a particular field --
 // everything downstream (CalcSpectrum, ComputeDecomposedSpectrumBundle) is
@@ -137,6 +146,7 @@ std::vector<std::string> ParseSpectrumNames(parthenon::ParameterInput *pin) {
   std::stringstream ss(spectra_str);
   std::string token;
   while (std::getline(ss, token, ',')) {
+    token = Trim(token);
     if (!token.empty()) names.push_back(token);
   }
   return names;

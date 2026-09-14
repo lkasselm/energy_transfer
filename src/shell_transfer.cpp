@@ -417,11 +417,22 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
 
 namespace {
 
+// Trims ASCII whitespace from both ends, so "UBT, UBP" and "UBT,UBP" parse
+// identically -- a token that's all whitespace comes back empty and is
+// dropped by SplitCommaList's caller.
+std::string Trim(const std::string &s) {
+  const auto first = s.find_first_not_of(" \t\n\r");
+  if (first == std::string::npos) return "";
+  const auto last = s.find_last_not_of(" \t\n\r");
+  return s.substr(first, last - first + 1);
+}
+
 std::vector<std::string> SplitCommaList(const std::string &s) {
   std::vector<std::string> out;
   std::stringstream ss(s);
   std::string token;
   while (std::getline(ss, token, ',')) {
+    token = Trim(token);
     if (!token.empty()) out.push_back(token);
   }
   return out;
