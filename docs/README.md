@@ -1,9 +1,205 @@
 # energy_transfer
 
-Shell-to-shell energy transfer analysis for turbulent (M)HD flows on a
-uniform-grid Parthenon mesh. A standalone library (depends on Parthenon, but
-lives outside both the Parthenon submodule and any single application's
-source tree) with two ways to use it:
+(M)HD turbulence analysis library powered by Parthenon. 
+
+## Features
+
+Two families of analysis, both computed spectrally (FFT-based, exact
+derivatives) on a uniform periodic grid and callable independently of each
+other:
+
+1. **Shell-to-shell transfer** of kinetic energy, magnetic energy and
+   magnetic helicity, optionally resolving the mediating scale as well
+   (triadic transfer).
+2. **Spectra** of energy and helicity, including a decomposition of vector
+   fields into compressive and left/right-handed (helical) solenoidal parts.
+
+### Conventions
+
+- Fields: `ρ` density, `U` velocity, `B` magnetic field (in units where the
+  magnetic pressure is `B²/2`), `P` thermal pressure, `a` external
+  acceleration (forcing). Two derived fields appear throughout: the
+  density-weighted velocity `W = √ρ U` and the Alfvén-like field
+  `b = B/√ρ`. `W` is the natural variable for compressible flows because the
+  kinetic energy density is exactly `½|W|²` (whereas `½|U|²` is not the
+  kinetic energy).
+- Shells partition Fourier space by `|k|`, in units of the fundamental
+  wavenumber `2π/L`; each shell is the half-open band `(k_low, k_high]`.
+  `F_Q` denotes the field `F` with only the Fourier modes of shell `Q` kept.
+- `⟨a, b⟩ = Σ a·b` is a plain sum over all grid cells (and MPI ranks) with
+  no volume normalization: divide by the number of cells for a domain
+  average, multiply by the cell volume for a domain integral.
+
+### 1. Shell-to-shell transfer
+
+The transfer function `T(K,Q)` is the rate at which the energy in the
+**receiver** shell `K` changes because of nonlinear interaction with the
+**donor** shell `Q` (positive: `K` gains from `Q`). It follows the
+formulation of Grete et al. (2017, Phys. Plasmas 24, 092311,
+[doi:10.1063/1.4990613](https://doi.org/10.1063/1.4990613)) for compressible
+MHD, extended here by a third, optional axis (the **mediator**, see below).
+The ideal equations for `W` and `B` are
+
+```
+∂ₜW = −(U·∇)W − ½W(∇·U)  +  (b·∇)B − ∇(B·B)/(2√ρ)  −  ∇P/√ρ  +  √ρ a
+∂ₜB = −(U·∇)B −  B(∇·U)  +  ∇·(b W)                       [∇·(bW) = (B·∇)U]
+```
+
+and the energies of shell `K` evolve as `dE_u(K)/dt = ⟨W_K, ∂ₜW⟩` and
+`dE_b(K)/dt = ⟨B_K, ∂ₜB⟩`. Splitting every nonlinear term on the right-hand
+side by the shell `Q` its donor field lives in gives the built-in terms:
+
+| Term | `T(K,Q)` | Process | Mediator | Extra fields |
+|------|----------|---------|----------|--------------|
+| `UUA`   | `−⟨W_K, (U·∇)W_Q⟩`                | kinetic → kinetic, advection            | `U`   | -   |
+| `UUC`   | `−½⟨W_K·W_Q, ∇·U⟩`                | kinetic → kinetic, compression          | `∇·U` | -   |
+| `BBA`   | `−⟨B_K, (U·∇)B_Q⟩`                | magnetic → magnetic, advection          | `U`   | `B` |
+| `BBC`   | `−½⟨B_K·B_Q, ∇·U⟩`                | magnetic → magnetic, compression        | `∇·U` | `B` |
+| `BUT`   | `+⟨W_K, (b·∇)B_Q⟩`                | magnetic → kinetic, tension             | `b`   | `B` |
+| `UBTb`  | `+⟨B_K, ∇·(b W_Q)⟩`               | kinetic → magnetic, tension             | `b`   | `B` |
+| `UBTbA` | `+⟨B_K, (b·∇)W_Q⟩`                | part of `UBTb` (derivative of `W`)      | `b`   | `B` |
+| `UBTbC` | `+⟨B_K, W_Q ∇·b⟩`                 | part of `UBTb` (divergence of `b`)      | `∇·b` | `B` |
+| `BUPbb` | `−½⟨W_K/√ρ, ∇(B·B_Q)⟩`            | magnetic → kinetic, magnetic pressure   | `B`   | `B` |
+| `UBPbb` | `−⟨B_K·B, ∇·(W_Q/(2√ρ))⟩`         | kinetic → magnetic, compression against `B` (magnetic pressure) | `B` | `B` |
+| `PU`    | `−⟨W_K/√ρ, ∇P_Q⟩`                 | thermal → kinetic, pressure gradient    | -     | `P` |
+| `FU`    | `+⟨W_K, √ρ a_Q⟩`                  | external forcing → kinetic              | -     | `a` |
+| `H`     | `+2⟨B_K, U×B_Q⟩`                  | magnetic helicity transfer              | `U`   | `B` |
+
+`ρ` and `U` are always required. Names read `<donor><receiver><mechanism>`
+(`U` kinetic, `B` magnetic; `A` advection, `C` compression, `T` tension,
+`P` pressure); the lowercase suffixes follow the upstream Python reference
+tool.
+
+**What each group does and what it conserves.** Summed over all donor shells
+the computed terms give the ideal-MHD rate of change of each shell's energy
+(up to donor modes outside the binning range, such as the `k=0` mean):
+
+```
+dE_u(K)/dt = Σ_Q [ UUA + UUC + BUT + BUPbb + PU + FU ](K,Q)
+dE_b(K)/dt = Σ_Q [ BBA + BBC + UBTb + UBPbb ](K,Q)
+```
+
+- **Kinetic and magnetic cascade (`UUA`+`UUC`, `BBA`+`BBC`).** Advection
+  carries a field's energy from scale to scale; compression (`∇·U ≠ 0`)
+  adds the part that has no incompressible counterpart. Only the *sums* are
+  antisymmetric, `T(K,Q) = −T(Q,K)`, and sum to zero over all shells: they
+  redistribute energy between scales without creating or destroying it. Neither
+  term is antisymmetric alone -- the factor `½` on the compressive term is
+  exactly what makes the sum so. (`docs/analytic_synthetic_field_derivation.md`
+  works this out by hand for a synthetic field.) In the induction equation
+  the compression term `−B∇·U` is split evenly: half is `BBC` (magnetic
+  donor), the other half is `UBPbb` (velocity donor, see below).
+- **Exchange between the reservoirs (`BUT`/`UBTb`, `BUPbb`/`UBPbb`).** The
+  Lorentz force `(B·∇)B − ∇(B²/2)` moves energy from magnetic to kinetic
+  through *tension* (field-line curvature, `BUT`) and *magnetic pressure*
+  (`BUPbb`); the induction equation returns it through stretching of field
+  lines by velocity gradients along the field (`UBTb`) and through
+  compression against `B` (`UBPbb`). Each pair is the same physical
+  exchange seen from either end: `BUT(K,Q) = −UBTb(Q,K)` and
+  `BUPbb(K,Q) = −UBPbb(Q,K)` exactly, so the kinetic energy that shell `K` gains from
+  magnetic shell `Q` is precisely what `Q` loses. `UBTb` is split by the
+  product rule into `UBTbA` (derivative of `W` along `b`) and `UBTbC`
+  (`W ∇·b`), with `UBTbA + UBTbC = UBTb`. Because
+  `∇·b = −B·∇ρ / (2ρ^{3/2})`, `UBTbC` vanishes unless the density varies
+  along the field, so it is the part of the tension exchange that is specific
+  to compressible flow.
+- **Sources (`PU`, `FU`).** `PU` is the kinetic energy exchanged with
+  the thermal reservoir through the pressure-gradient force; `FU` is the
+  energy injected by the forcing acceleration `a`. Neither has a counterpart
+  term, since no internal-energy budget is computed. Viscous and resistive
+  dissipation are not included either.
+- **Magnetic helicity (`H`).** The helicity of shell `K` is
+  `⟨A_K, B_K⟩` with `A` the Coulomb-gauge vector potential. Ideal induction
+  gives `∂ₜA = U×B − ∇φ`; the gauge term `∇φ` drops out against the
+  solenoidal `B_K`, and since `⟨A_K, ∂ₜB_K⟩ = ⟨∂ₜA_K, B_K⟩` the shell
+  helicity changes at `2⟨B_K, U×B⟩`. Splitting `B` into donor shells gives
+  `H(K,Q)`. It is antisymmetric and sums to zero, reflecting ideal
+  conservation of total helicity, so it only redistributes helicity between
+  scales (e.g. an inverse transfer shows up as `H(K,Q) > 0` for `K < Q`).
+  Formulation as in Teissier & Müller (2021, J. Fluid Mech. 921,
+  [doi:10.1017/jfm.2021.496](https://doi.org/10.1017/jfm.2021.496)). Where
+  the helicity resides is given by `spec_helicity` below; `H` shows how it moves.
+
+**Resolving donor, mediator and receiver.** Every term is a triple
+product: a receiver field, a donor field, and a third mediating field that
+couples them (e.g. the advecting `U` in `UUA`, or the tension field `b` in
+`BUT`). By default the donor and receiver are resolved into shells and the
+mediator is left whole, which gives the classical two-shell transfer
+`T(K,Q)`. Resolving the mediator too gives the triadic transfer
+`T(K,M,Q)`: how much of the transfer from `Q` to `K` is carried by the
+mediating field at scale `M`, for instance to separate transfer by
+large-scale flows from transfer by small-scale ones. Each axis has its own
+binning (linear, logarithmic or custom edges) and can be resolved
+independently, so e.g. donor and receiver can be pinned to two narrow bands
+while the mediator sweeps all scales. For the terms that are linear in the
+mediator, summing over the mediator shells reproduces the unresolved result;
+`PU` and `FU` have no mediating field (only a density normalization) and
+cannot be mediator-resolved. Note that none of the built-in binnings
+contains the mean (`k=0`) mode: an unresolved axis uses the full field
+including its mean, a resolved one does not, so transfer mediated by a
+uniform background field (e.g. a mean magnetic field acting through `b·∇`)
+is only captured with the mediator left unresolved. See
+"Built-in terms" below for how to select the axes and binnings.
+
+### 2. Spectra
+
+**Power spectra** (`spec_U`, `spec_rho`, `spec_W`, `spec_B`) are binned in
+unit-width shells of `|k|` and returned as three columns per spectrum:
+`pow_sum` (sum of `|f̂|²` over the modes in the bin), `k_sum` and
+`count_sum` (so the mean wavenumber of a bin is `k_sum/count_sum`). The Fourier
+transform is normalized so that `Σ_bins pow_sum = ⟨|f|²⟩`, the
+volume average of the squared field. These are raw squared amplitudes, not energies:
+the magnetic energy spectrum is `½ spec_B`, and the kinetic energy spectrum of a
+compressible flow is `½ spec_W` (density-weighted), not `½ spec_U`.
+
+**Compressive and helical decomposition** (`spec_U_decomp`,
+`spec_W_decomp`, `spec_B_decomp`). Each Fourier mode of a vector field is
+projected onto the orthonormal complex basis `{k̂, h₊, h₋}` with
+`h± = (e₁ ± i e₂)/√2` and `e₁, e₂ ⟂ k̂`:
+
+- **compressive**: the part parallel to `k` (curl-free, longitudinal);
+- **plus / minus**: the two circularly polarized parts transverse to `k`
+  (divergence-free, helical: `∇×h± = ±|k| h±`), carrying positive and
+  negative helicity respectively.
+
+A bundle returns four spectra from one shared forward FFT: the full
+spectrum and its `_compressive`, `_plus` and `_minus` parts. At every bin
+except `k=0`, the three parts sum to the full spectrum exactly
+(orthonormality of the basis); at `k=0` the direction is undefined, so all
+three are zero there and only the full spectrum carries the mean. Typical uses:
+
+- `spec_U_compressive` against `spec_U_plus + spec_U_minus` (or the `W`
+  equivalent) is the scale-dependent compressive-to-solenoidal ratio of the flow.
+- `spec_B_compressive` is zero for an exactly solenoidal field, so for
+  simulation data it measures the spectral `∇·B` error at each scale.
+- `spec_*_plus` against `spec_*_minus` quantifies the helicity imbalance
+  of a field; for `U`, `k (spec_U_plus − spec_U_minus)` is the kinetic
+  helicity spectrum.
+
+Decomposing the transfer terms themselves into these components is not
+implemented yet.
+
+**Helicity spectra** (both need `B`, implemented in `helicity.hpp`):
+
+- `spec_helicity` is the *signed* magnetic helicity spectrum `Re(Â·B̂*)`,
+  with the Coulomb-gauge potential `Â = i(k×B̂)/|k|²` (zero at `k=0`). It is
+  a co-spectrum of two different fields, not a power spectrum, so its
+  bins can be negative, and it sums to the volume-averaged helicity
+  `⟨A·B⟩`. Each mode contributes `(|b₊|² − |b₋|²)/|k|`, where `b±` are its
+  helical amplitudes, which ties it directly to the decomposition above and
+  bounds it by `|Re(Â·B̂*)| ≤ |B̂|²/|k|` per mode: the relative helicity
+  `k·spec_helicity/spec_B` lies in `[−1, 1]` (up to binning effects).
+- `spec_helicity_variance` is the ordinary power spectrum of the
+  real-space local helicity density `h(x) = A(x)·B(x)`. It measures the
+  scales on which the helicity density fluctuates in space, a different
+  quantity from `spec_helicity`, which measures how much of the *total*
+  helicity sits at each `k`.
+
+`CalcHelicity(pm, B)` returns `h(x)` itself and is usable outside the
+spectra machinery, e.g. to write the field back into an application's mesh.
+
+
+## Usage
 
 1. **On the fly**, linked into any Parthenon application: call
    `energy_transfer::GatherLiveFields(...)` from your own hook (e.g.
@@ -112,7 +308,7 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
 ### Built-in terms
 
 `UUA, UUC, BBA, BBC, BUT, UBTb, UBTbA, UBTbC, BUPbb, UBPbb, PU, FU, H` (see
-`docs/plan.md` for their physical meaning) plus spectra `spec_U, spec_rho,
+"Features" above for their physical meaning) plus spectra `spec_U, spec_rho,
 spec_W, spec_B`, and a directionally-decomposed variant of each vector field
 requested via a single bundle name -- `spec_U_decomp`, `spec_W_decomp`,
 `spec_B_decomp` (`rho` is scalar, no direction to decompose against; `B`'s
