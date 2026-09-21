@@ -7,7 +7,6 @@
 
 #include <interface/mesh_data.hpp>
 #include <mesh/mesh.hpp>
-#include <parameter_input.hpp>
 
 #include "energy_transfer/field_spec.hpp"
 #include "energy_transfer/flat_fields.hpp"
@@ -31,25 +30,6 @@ struct FileFieldNaming {
   std::optional<std::string> pres_or_energy;  // pressure or total_energy
   std::optional<std::array<std::string, 3>> acc;
   Real gamma = 5.0 / 3.0;
-
-  // Convenience: reads the same <energy_transfer>/input_*_field parameters
-  // the original driver used (mesh/field name pairs with defaults, only
-  // meaningful for ADIOS2 -- ignored for Parthenon HDF5, which has no mesh/
-  // prefix concept), for callers driving configuration from a parthenon
-  // input deck.
-  static FileFieldNaming FromInputADIOS2(parthenon::ParameterInput *pin, bool need_mag,
-                                         bool need_pres_or_energy, bool need_acc);
-
-  // Same idea, but defaulting to AthenaPK's native prim/cons component names
-  // (see athenapk/src/hydro/hydro.cpp) instead of ADIOS2's flat/mesh naming,
-  // since a Parthenon HDF5 dump stores AthenaPK's own field layout directly.
-  static FileFieldNaming FromInputPHDF(parthenon::ParameterInput *pin, bool need_mag,
-                                       bool need_pres_or_energy, bool need_acc);
-
-  // Picks FromInputADIOS2 or FromInputPHDF based on input_file's extension.
-  static FileFieldNaming FromInput(parthenon::ParameterInput *pin,
-                                   const std::string &input_file, bool need_mag,
-                                   bool need_pres_or_energy, bool need_acc);
 };
 
 // Gathers fields from a live MeshData container according to spec, into the

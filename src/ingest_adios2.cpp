@@ -11,19 +11,6 @@ namespace energy_transfer {
 
 namespace {
 
-std::string JoinInputName(const std::string &prefix, const std::string &mesh,
-                          const std::string &field) {
-  std::string name = prefix;
-  auto append = [&](const std::string &part) {
-    if (part.empty()) return;
-    if (!name.empty() && name.back() != '/') name += "/";
-    name += part;
-  };
-  append(mesh);
-  append(field);
-  return name;
-}
-
 bool HasSuffix(const std::string &s, const std::string &suffix) {
   return s.size() >= suffix.size() &&
         s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -40,83 +27,6 @@ InputFileFormat DetectInputFileFormat(const std::string &input_file) {
   PARTHENON_FAIL("energy_transfer/input_file must be an ADIOS2/bp5 file (.bp) or a "
                  "Parthenon HDF5 output file (.phdf, .h5, or .hdf5), got: " + input_file);
   return InputFileFormat::ADIOS2;
-}
-
-FileFieldNaming FileFieldNaming::FromInput(parthenon::ParameterInput *pin,
-                                           const std::string &input_file, bool need_mag,
-                                           bool need_pres_or_energy, bool need_acc) {
-  switch (DetectInputFileFormat(input_file)) {
-  case InputFileFormat::ADIOS2:
-    return FromInputADIOS2(pin, need_mag, need_pres_or_energy, need_acc);
-  case InputFileFormat::ParthenonHDF5:
-    return FromInputPHDF(pin, need_mag, need_pres_or_energy, need_acc);
-  }
-  PARTHENON_FAIL("energy_transfer: unreachable");
-  return FileFieldNaming{};
-}
-
-FileFieldNaming FileFieldNaming::FromInputADIOS2(parthenon::ParameterInput *pin, bool need_mag,
-                                                 bool need_pres_or_energy, bool need_acc) {
-  FileFieldNaming naming;
-
-  const auto input_quantity_type =
-      pin->GetOrAddString("energy_transfer", "input_quantity_type", "primitive");
-  PARTHENON_REQUIRE_THROWS(
-      input_quantity_type == "primitive" || input_quantity_type == "conserved",
-      "energy_transfer/input_quantity_type must be 'primitive' or 'conserved'");
-  naming.input_conserved = input_quantity_type == "conserved";
-  naming.gamma = pin->GetOrAddReal("energy_transfer", "gamma", 5.0 / 3.0);
-
-  const auto prefix = pin->GetOrAddString("energy_transfer", "input_variable_prefix", "");
-  auto input_name = [&](const std::string &mesh_param, const std::string &field_param,
-                        const std::string &flat_default,
-                        const std::string &component_default) -> std::string {
-    const auto mesh = pin->GetOrAddString("energy_transfer", mesh_param, std::string(""));
-    const auto field_default = mesh.empty() ? flat_default : component_default;
-    const auto field = pin->GetOrAddString("energy_transfer", field_param, field_default);
-    return JoinInputName(prefix, mesh, field);
-  };
-
-  naming.rho = input_name("input_rho_mesh", "input_rho_field", "rho", "SCALAR");
-
-  if (naming.input_conserved) {
-    naming.mom_or_vel = {
-        input_name("input_momentum_mesh", "input_momentum_x_field", "mom_x", "x"),
-        input_name("input_momentum_mesh", "input_momentum_y_field", "mom_y", "y"),
-        input_name("input_momentum_mesh", "input_momentum_z_field", "mom_z", "z")};
-  } else {
-    naming.mom_or_vel = {
-        input_name("input_velocity_mesh", "input_velocity_x_field", "vel_x", "x"),
-        input_name("input_velocity_mesh", "input_velocity_y_field", "vel_y", "y"),
-        input_name("input_velocity_mesh", "input_velocity_z_field", "vel_z", "z")};
-  }
-
-  // Total energy includes the magnetic contribution, so converting conserved
-  // energy to pressure always requires the magnetic field, even if no
-  // requested term otherwise needs it -- mirrors driver.cpp:310-311.
-  if (need_mag || (naming.input_conserved && need_pres_or_energy)) {
-    naming.mag = std::array<std::string, 3>{
-        input_name("input_magnetic_mesh", "input_magnetic_x_field", "mag_x", "x"),
-        input_name("input_magnetic_mesh", "input_magnetic_y_field", "mag_y", "y"),
-        input_name("input_magnetic_mesh", "input_magnetic_z_field", "mag_z", "z")};
-  }
-
-  if (need_pres_or_energy) {
-    naming.pres_or_energy =
-        naming.input_conserved
-            ? input_name("input_total_energy_mesh", "input_total_energy_field",
-                         "total_energy", "SCALAR")
-            : input_name("input_pressure_mesh", "input_pressure_field", "pres", "SCALAR");
-  }
-
-  if (need_acc) {
-    naming.acc = std::array<std::string, 3>{
-        input_name("input_acceleration_mesh", "input_acceleration_x_field", "acc_x", "x"),
-        input_name("input_acceleration_mesh", "input_acceleration_y_field", "acc_y", "y"),
-        input_name("input_acceleration_mesh", "input_acceleration_z_field", "acc_z", "z")};
-  }
-
-  return naming;
 }
 
 FlatFields ReadADIOS2Fields(parthenon::Mesh *pmesh, const std::string &input_file,

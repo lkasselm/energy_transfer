@@ -1,7 +1,5 @@
 #include "energy_transfer/spectra.hpp"
 
-#include <sstream>
-
 #include <kokkos_abstraction.hpp>
 #include <utils/calc_spectrum.hpp>
 #include <utils/error_checking.hpp>
@@ -21,15 +19,6 @@ namespace {
 // handled as two explicit names instead, checked before the table lookup.
 bool IsHelicitySpectrumName(const std::string &name) {
   return name == "spec_helicity" || name == "spec_helicity_variance";
-}
-
-// Trims ASCII whitespace from both ends, so "spec_U, spec_B" and
-// "spec_U,spec_B" parse identically.
-std::string Trim(const std::string &s) {
-  const auto first = s.find_first_not_of(" \t\n\r");
-  if (first == std::string::npos) return "";
-  const auto last = s.find_last_not_of(" \t\n\r");
-  return s.substr(first, last - first + 1);
 }
 
 // ---- Field selectors -----------------------------------------------------
@@ -138,18 +127,6 @@ ComputeDecomposedSpectrumBundle(parthenon::Mesh *pm, const std::string &base_nam
 bool SpectrumNeedsMag(const std::string &name) {
   if (IsHelicitySpectrumName(name)) return true;
   return LookupSpectrum(name).needs_mag;
-}
-
-std::vector<std::string> ParseSpectrumNames(parthenon::ParameterInput *pin) {
-  const auto spectra_str = pin->GetOrAddString("energy_transfer", "spectra", "spec_U");
-  std::vector<std::string> names;
-  std::stringstream ss(spectra_str);
-  std::string token;
-  while (std::getline(ss, token, ',')) {
-    token = Trim(token);
-    if (!token.empty()) names.push_back(token);
-  }
-  return names;
 }
 
 std::map<std::string, parthenon::HostArray2D<TransferReal>>

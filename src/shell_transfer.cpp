@@ -5,7 +5,6 @@
 #include <iostream>
 #include <map>
 #include <set>
-#include <sstream>
 #include <string>
 
 #include <globals.hpp>
@@ -46,23 +45,13 @@ std::vector<Real> BuildShellEdges(const BinningSpec &binning, int Nx) {
   return edges;
 }
 
-std::set<std::string> QuantityNamesForTerms(const std::vector<std::string> &terms) {
-  const auto &term_table = BuiltinTerms();
-  std::set<std::string> names;
-  for (auto &name : terms) {
-    auto it = term_table.find(name);
-    PARTHENON_REQUIRE_THROWS(it != term_table.end(),
-                             "energy_transfer: unknown term '" + name + "'");
-    names.insert(it->second.q_side_quantity);
-    names.insert(it->second.k_side_quantity);
-  }
-  return names;
-}
-
-// Splits the same lookup by which side each term uses a quantity on, so the
-// shared shell sweep in ComputeEnergyTransfer can build one small set of
-// Q-side buffers and one of K-side buffers per (qi,mi)/(mi,ki) rather than a
-// single undifferentiated set.
+// Which derived quantities (from BuiltinTerms()) each requested term needs
+// on its Q side vs its K side. Kept split, not merged, since the shared
+// shell sweep in ComputeEnergyTransfer builds one small set of Q-side
+// buffers and one of K-side buffers per (qi,mi)/(mi,ki) rather than a single
+// undifferentiated set -- BaseFieldClosure below flattens both sides
+// together for callers that only care which raw fields are needed at all,
+// regardless of side.
 struct TermQuantityNames {
   std::set<std::string> q_side;
   std::set<std::string> k_side;
@@ -81,15 +70,19 @@ TermQuantityNames SplitQuantityNamesForTerms(const std::vector<std::string> &ter
   return names;
 }
 
-std::set<std::string> BaseFieldClosure(const std::set<std::string> &quantity_names) {
+std::set<std::string> BaseFieldClosure(const TermQuantityNames &quantity_names) {
   const auto &qtable = BuiltinQuantities();
   std::set<std::string> tags;
-  for (auto &qn : quantity_names) {
-    auto it = qtable.find(qn);
-    PARTHENON_REQUIRE_THROWS(it != qtable.end(),
-                             "energy_transfer: unknown derived quantity '" + qn + "'");
-    for (auto &t : it->second.required_base_fields) tags.insert(t);
-  }
+  auto add_side = [&](const std::set<std::string> &names) {
+    for (auto &qn : names) {
+      auto it = qtable.find(qn);
+      PARTHENON_REQUIRE_THROWS(it != qtable.end(),
+                               "energy_transfer: unknown derived quantity '" + qn + "'");
+      for (auto &t : it->second.required_base_fields) tags.insert(t);
+    }
+  };
+  add_side(quantity_names.q_side);
+  add_side(quantity_names.k_side);
   return tags;
 }
 
@@ -115,7 +108,7 @@ void CheckRuntimeConstraints(parthenon::Mesh *pmesh) {
 
 FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg,
                                            const std::vector<std::string> &spectrum_names) {
-  auto qnames = QuantityNamesForTerms(cfg.terms);
+  auto qnames = SplitQuantityNamesForTerms(cfg.terms);
   auto tags = BaseFieldClosure(qnames);
 
   FieldRequirements req;
@@ -158,8 +151,8 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   const ShellRestriction no_restriction{false, kNoRestrictionKLow,
                                         NoRestrictionKHigh(Nx, Ny, Nz)};
 
-  const auto qnames = QuantityNamesForTerms(cfg.terms);
-  const auto tags = BaseFieldClosure(qnames);
+  const auto split_names = SplitQuantityNamesForTerms(cfg.terms);
+  const auto tags = BaseFieldClosure(split_names);
 
   // cfg.mode is global -- shared by every term in cfg.terms (see
   // ShellTransferConfig::mode). If mediator decomposition is requested, it
@@ -348,7 +341,6 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   const int n_q = q_resolved ? n_donor_shells : 1;
   const int n_k = k_resolved ? n_receiver_shells : 1;
   const int n_m = m_resolved ? n_mediator_shells : 1;
-  const auto split_names = SplitQuantityNamesForTerms(cfg.terms);
 
   for (auto &term_name : cfg.terms) {
     result.matrices.emplace(term_name,
@@ -413,111 +405,6 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   }
 
   return result;
-}
-
-namespace {
-
-// Trims ASCII whitespace from both ends, so "UBT, UBP" and "UBT,UBP" parse
-// identically -- a token that's all whitespace comes back empty and is
-// dropped by SplitCommaList's caller.
-std::string Trim(const std::string &s) {
-  const auto first = s.find_first_not_of(" \t\n\r");
-  if (first == std::string::npos) return "";
-  const auto last = s.find_last_not_of(" \t\n\r");
-  return s.substr(first, last - first + 1);
-}
-
-std::vector<std::string> SplitCommaList(const std::string &s) {
-  std::vector<std::string> out;
-  std::stringstream ss(s);
-  std::string token;
-  while (std::getline(ss, token, ',')) {
-    token = Trim(token);
-    if (!token.empty()) out.push_back(token);
-  }
-  return out;
-}
-
-// energy_transfer/mode= is just the set of axes that are decomposed: any
-// subset of donor/mediator/receiver, in any order. An empty list decomposes
-// nothing (one global number per term); "donor,receiver" is the default.
-DecompositionMode ParseDecompositionMode(const std::string &s) {
-  DecompositionMode mode{false, false, false};
-  for (const auto &axis : SplitCommaList(s)) {
-    if (axis == "donor") {
-      mode.donor_resolved = true;
-    } else if (axis == "mediator") {
-      mode.mediator_resolved = true;
-    } else if (axis == "receiver") {
-      mode.receiver_resolved = true;
-    } else {
-      PARTHENON_FAIL(("energy_transfer: unknown mode axis '" + axis +
-                      "' -- energy_transfer/mode= takes any comma-separated subset of "
-                      "donor, mediator, receiver")
-                         .c_str());
-    }
-  }
-  return mode;
-}
-
-BinningSpec ParseBinningSpecFromKeys(parthenon::ParameterInput *pin,
-                                     const std::string &binning_key,
-                                     const std::string &num_shells_key,
-                                     const std::string &shell_edges_key) {
-  const auto binning_str = pin->GetOrAddString("energy_transfer", binning_key, "lin");
-  const auto num_shells = pin->GetOrAddInteger("energy_transfer", num_shells_key, 20);
-  if (binning_str == "lin") return BinningSpec::Linear(num_shells);
-  if (binning_str == "log") return BinningSpec::Log(num_shells);
-  if (binning_str == "custom") {
-    const auto edges_str = pin->GetOrAddString("energy_transfer", shell_edges_key, "");
-    std::vector<Real> edges;
-    for (const auto &token : SplitCommaList(edges_str)) {
-      edges.push_back(static_cast<Real>(std::stod(token)));
-    }
-    PARTHENON_REQUIRE_THROWS(edges.size() >= 2,
-                             "energy_transfer/" + binning_key +
-                                 "=custom requires energy_transfer/" + shell_edges_key +
-                                 " to list at least 2 comma-separated bin-edge values, e.g. " +
-                                 shell_edges_key + " = 0.5,1.5,2.5,16.0,26.5,28.5,32.0");
-    return BinningSpec::Custom(std::move(edges));
-  }
-  PARTHENON_FAIL(("energy_transfer/" + binning_key + " must be 'lin', 'log', or 'custom'").c_str());
-  return BinningSpec::Linear(num_shells);
-}
-
-} // namespace
-
-ShellTransferConfig ShellTransferConfig::FromInput(parthenon::ParameterInput *pin) {
-  ShellTransferConfig cfg;
-
-  // Shared default: binning=/num_shells=/shell_edges= (no prefix), used by
-  // any axis without its own explicit donor_/mediator_/receiver_ override --
-  // an input deck that only sets these keeps all three axes sharing one
-  // binning, exactly as before mediator decomposition existed.
-  const auto default_binning = ParseBinningSpecFromKeys(pin, "binning", "num_shells", "shell_edges");
-
-  cfg.donor_binning = pin->DoesParameterExist("energy_transfer", "donor_binning")
-                          ? ParseBinningSpecFromKeys(pin, "donor_binning", "donor_num_shells",
-                                                     "donor_shell_edges")
-                          : default_binning;
-  cfg.mediator_binning =
-      pin->DoesParameterExist("energy_transfer", "mediator_binning")
-          ? ParseBinningSpecFromKeys(pin, "mediator_binning", "mediator_num_shells",
-                                     "mediator_shell_edges")
-          : default_binning;
-  cfg.receiver_binning =
-      pin->DoesParameterExist("energy_transfer", "receiver_binning")
-          ? ParseBinningSpecFromKeys(pin, "receiver_binning", "receiver_num_shells",
-                                     "receiver_shell_edges")
-          : default_binning;
-
-  const auto terms_str = pin->GetOrAddString("energy_transfer", "terms", "UUA,UUC");
-  cfg.terms = SplitCommaList(terms_str);
-
-  const auto mode_str = pin->GetOrAddString("energy_transfer", "mode", "donor,receiver");
-  cfg.mode = ParseDecompositionMode(mode_str);
-
-  return cfg;
 }
 
 } // namespace energy_transfer

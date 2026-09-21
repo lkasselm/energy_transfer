@@ -6,15 +6,11 @@
 #include <vector>
 
 #include <mesh/mesh.hpp>
-#include <parameter_input.hpp>
 
 #include "energy_transfer/flat_fields.hpp"
 #include "energy_transfer/registry.hpp" // for the shared TransferReal alias only
 
 namespace energy_transfer {
-
-// Reads energy_transfer/spectra= (comma-separated names, default "spec_U").
-std::vector<std::string> ParseSpectrumNames(parthenon::ParameterInput *pin);
 
 // Whether computing this spectrum requires the magnetic field to be loaded.
 // Throws for an unknown name. Used by ComputeFieldRequirements to decide

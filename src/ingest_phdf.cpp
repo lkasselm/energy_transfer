@@ -20,65 +20,6 @@
 
 namespace energy_transfer {
 
-// Same field-selection parameter names as the ADIOS2 path (e.g.
-// input_rho_field), but defaulting to AthenaPK's native prim/cons component
-// names (see athenapk/src/hydro/hydro.cpp) since a Parthenon HDF5 dump
-// stores AthenaPK's own field layout directly -- there's no mesh/prefix
-// concept to resolve here, unlike ADIOS2's flat/mesh naming.
-FileFieldNaming FileFieldNaming::FromInputPHDF(parthenon::ParameterInput *pin, bool need_mag,
-                                               bool need_pres_or_energy, bool need_acc) {
-  FileFieldNaming naming;
-
-  const auto input_quantity_type =
-      pin->GetOrAddString("energy_transfer", "input_quantity_type", "primitive");
-  PARTHENON_REQUIRE_THROWS(
-      input_quantity_type == "primitive" || input_quantity_type == "conserved",
-      "energy_transfer/input_quantity_type must be 'primitive' or 'conserved'");
-  naming.input_conserved = input_quantity_type == "conserved";
-  naming.gamma = pin->GetOrAddReal("energy_transfer", "gamma", 5.0 / 3.0);
-
-  auto field_name = [&](const std::string &field_param, const std::string &default_component) {
-    return pin->GetOrAddString("energy_transfer", field_param, default_component);
-  };
-
-  naming.rho = field_name("input_rho_field", "prim_density");
-
-  if (naming.input_conserved) {
-    naming.mom_or_vel = {field_name("input_momentum_x_field", "cons_momentum_density_1"),
-                        field_name("input_momentum_y_field", "cons_momentum_density_2"),
-                        field_name("input_momentum_z_field", "cons_momentum_density_3")};
-  } else {
-    naming.mom_or_vel = {field_name("input_velocity_x_field", "prim_velocity_1"),
-                        field_name("input_velocity_y_field", "prim_velocity_2"),
-                        field_name("input_velocity_z_field", "prim_velocity_3")};
-  }
-
-  // Total energy includes the magnetic contribution, so converting conserved
-  // energy to pressure always requires the magnetic field, even if no
-  // requested term otherwise needs it -- mirrors the ADIOS2 path.
-  if (need_mag || (naming.input_conserved && need_pres_or_energy)) {
-    naming.mag = std::array<std::string, 3>{
-        field_name("input_magnetic_x_field", "prim_magnetic_field_1"),
-        field_name("input_magnetic_y_field", "prim_magnetic_field_2"),
-        field_name("input_magnetic_z_field", "prim_magnetic_field_3")};
-  }
-
-  if (need_pres_or_energy) {
-    naming.pres_or_energy = naming.input_conserved
-                                ? field_name("input_total_energy_field",
-                                            "cons_total_energy_density")
-                                : field_name("input_pressure_field", "prim_pressure");
-  }
-
-  if (need_acc) {
-    naming.acc = std::array<std::string, 3>{field_name("input_acceleration_x_field", "acc_1"),
-                                            field_name("input_acceleration_y_field", "acc_2"),
-                                            field_name("input_acceleration_z_field", "acc_3")};
-  }
-
-  return naming;
-}
-
 #ifndef ENABLE_HDF5
 
 FlatFields ReadPHDFFields(parthenon::Mesh *, const std::string &, const FileFieldNaming &) {

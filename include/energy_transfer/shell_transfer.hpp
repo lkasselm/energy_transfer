@@ -6,7 +6,6 @@
 #include <vector>
 
 #include <mesh/mesh.hpp>
-#include <parameter_input.hpp>
 
 #include "energy_transfer/flat_fields.hpp"
 #include "energy_transfer/registry.hpp"
@@ -86,19 +85,6 @@ struct ShellTransferConfig {
   // like rho -- currently PU and FU), the whole call throws immediately,
   // before any computation starts.
   DecompositionMode mode{/*donor=*/true, /*mediator=*/false, /*receiver=*/true};
-
-  // Reads an <energy_transfer> input block: binning=lin|log|custom,
-  // num_shells=, shell_edges= set a default binning shared by all three
-  // axes; donor_binning=/mediator_binning=/receiver_binning= (each with its
-  // own _num_shells=/_shell_edges=) override just that one axis when
-  // present, falling back to the shared default otherwise. terms=UUA,BBA,BUT
-  // is a plain comma-separated name list (no per-term mode suffix); mode=
-  // is a comma-separated list of which axes are decomposed, any subset of
-  // donor/mediator/receiver in any order (default "donor,receiver"; an
-  // empty list means no axis is decomposed, i.e. one global number per
-  // term). Does NOT read spectra= -- that's a separate, independent
-  // concern, see spectra.hpp's ParseSpectrumNames.
-  static ShellTransferConfig FromInput(parthenon::ParameterInput *pin);
 };
 
 struct TransferResult {
@@ -125,10 +111,9 @@ struct TransferResult {
 
 // Which real-space fields ingestion must load for the requested terms/
 // spectra to be computable. Used to build a minimal LiveFieldSpec/
-// FileFieldNaming before ingestion runs. spectrum_names is typically
-// ParseSpectrumNames(pin) (see spectra.hpp) -- passed in explicitly rather
-// than folded into ShellTransferConfig, since spectra are an independent
-// concern from the shell-transfer terms.
+// FileFieldNaming before ingestion runs. spectrum_names is passed in
+// explicitly rather than folded into ShellTransferConfig, since spectra are
+// an independent concern from the shell-transfer terms.
 struct FieldRequirements {
   bool mag = false;
   bool pres_or_energy = false;

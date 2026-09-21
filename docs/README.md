@@ -101,7 +101,6 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
     `LiveFieldSpec`/`FileFieldNaming` (the offline tool does this
     automatically).
 - `spectra.hpp` -- power spectra, independent of shell-to-shell transfer:
-  - `ParseSpectrumNames(pin)` -- reads `spectra=` from an input deck.
   - `ComputeSpectra(Mesh*, const FlatFields&, spectrum_names)` -- same
     ingested/primitive `FlatFields` as `ComputeEnergyTransfer` above; returns
     a plain `map<string, HostArray2D<TransferReal>>` (a caller wanting both
