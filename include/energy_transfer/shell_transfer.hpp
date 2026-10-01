@@ -87,7 +87,13 @@ struct ShellTransferConfig {
   DecompositionMode mode{/*donor=*/true, /*mediator=*/false, /*receiver=*/true};
 };
 
-struct TransferResult {
+// Output of ComputeEnergyTransfer alone -- shell-transfer is one of
+// potentially several independent kinds of result this library can produce
+// (spectra, via spectra.hpp, is another; see io_openpmd.hpp's WriteResult,
+// which takes each kind as its own optional argument rather than bundling
+// them into one fused struct). This type carries only what
+// ComputeEnergyTransfer itself computes.
+struct ShellTransferResult {
   int n_donor_shells = 0;
   int n_mediator_shells = 0;
   int n_receiver_shells = 0;
@@ -102,11 +108,6 @@ struct TransferResult {
   // was set, matching how n_q/n_k collapse to 1 for an unresolved donor/receiver
   // side).
   std::map<std::string, parthenon::HostArray3D<TransferReal>> matrices;
-  // Keyed by spectrum name -- left empty by ComputeEnergyTransfer (it knows
-  // nothing about spectra); a caller wanting both fills this in itself from
-  // ComputeSpectra's result (see spectra.hpp) before e.g. passing the result
-  // to WriteResult.
-  std::map<std::string, parthenon::HostArray2D<TransferReal>> spectra;
 };
 
 // Which real-space fields ingestion must load for the requested terms/
@@ -124,10 +125,10 @@ FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg,
 
 // Core computation: fields must already be in primitive form (see
 // ConvertConservedToPrimitive) and populated per ComputeFieldRequirements(cfg).
-// Populates only TransferResult::matrices -- see spectra.hpp's ComputeSpectra
-// for the independent, separately-callable spectra computation.
-TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
-                                     const ShellTransferConfig &cfg);
+// See spectra.hpp's ComputeSpectra for the independent, separately-callable
+// spectra computation.
+ShellTransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
+                                          const ShellTransferConfig &cfg);
 
 } // namespace energy_transfer
 

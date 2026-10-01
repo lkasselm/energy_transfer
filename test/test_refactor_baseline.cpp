@@ -17,6 +17,7 @@
 #include "energy_transfer/convert.hpp"
 #include "energy_transfer/field_spec.hpp"
 #include "energy_transfer/ingest.hpp"
+#include "energy_transfer/io_openpmd.hpp"
 #include "energy_transfer/shell_transfer.hpp"
 #include "energy_transfer/spectra.hpp"
 
@@ -39,7 +40,8 @@ parthenon::Packages_t ProcessPackages(std::unique_ptr<parthenon::ParameterInput>
 
 // Serializes every matrix/spectrum entry deterministically -- std::setprecision(17)
 // round-trips a double exactly, so a line-by-line text diff is a genuine bitwise check.
-std::vector<std::string> SerializeResult(const energy_transfer::TransferResult &result) {
+std::vector<std::string> SerializeResult(const energy_transfer::ShellTransferResult &result,
+                                         const energy_transfer::SpectraResult &spectra) {
   std::vector<std::string> lines;
   std::ostringstream oss;
   oss << std::setprecision(17);
@@ -54,7 +56,7 @@ std::vector<std::string> SerializeResult(const energy_transfer::TransferResult &
       }
     }
   }
-  for (auto &[name, sarr] : result.spectra) {
+  for (auto &[name, sarr] : spectra) {
     for (int bin = 0; bin < static_cast<int>(sarr.extent(0)); bin++) {
       for (int col = 0; col < static_cast<int>(sarr.extent(1)); col++) {
         oss.str("");
@@ -176,8 +178,8 @@ int main(int argc, char *argv[]) {
     energy_transfer::ConvertConservedToPrimitive(fields);
 
     auto res = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
-    res.spectra = energy_transfer::ComputeSpectra(pmesh, fields, spectrum_names);
-    auto lines = SerializeResult(res);
+    auto spectra = energy_transfer::ComputeSpectra(pmesh, fields, spectrum_names);
+    auto lines = SerializeResult(res, spectra);
     std::sort(lines.begin(), lines.end());
 
     std::ifstream existing(golden_path);

@@ -122,8 +122,8 @@ FieldRequirements ComputeFieldRequirements(const ShellTransferConfig &cfg,
   return req;
 }
 
-TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
-                                     const ShellTransferConfig &cfg) {
+ShellTransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
+                                          const ShellTransferConfig &cfg) {
   PARTHENON_REQUIRE_THROWS(!fields.is_conserved,
                            "energy_transfer: FlatFields must be in primitive form -- call "
                            "ConvertConservedToPrimitive() first.");
@@ -306,7 +306,7 @@ TransferResult ComputeEnergyTransfer(parthenon::Mesh *pmesh, FlatFields &fields,
   const auto &quantity_table = BuiltinQuantities();
   const auto &term_table = BuiltinTerms();
 
-  TransferResult result;
+  ShellTransferResult result;
   result.n_donor_shells = n_donor_shells;
   result.n_mediator_shells = n_mediator_shells;
   result.n_receiver_shells = n_receiver_shells;

@@ -48,8 +48,9 @@ std::string ResolveIterationFilename(const std::string &output_file) {
 
 } // namespace
 
-void WriteResult(const TransferResult &result, const std::string &output_file,
-                 int output_number, MPI_Comm comm) {
+void WriteResult(const std::string &output_file, int output_number,
+                 const ShellTransferResult *shell_transfer, const SpectraResult *spectra,
+                 MPI_Comm comm) {
   PARTHENON_REQUIRE_THROWS(output_number >= 0, "energy_transfer: output_number must be non-negative");
 
   const auto fname = ResolveIterationFilename(output_file);
@@ -58,76 +59,82 @@ void WriteResult(const TransferResult &result, const std::string &output_file,
 
   auto it = series.iterations[static_cast<uint64_t>(output_number)];
   it.open();
-  it.setAttribute("donor_shell_edges", result.donor_edges);
-  it.setAttribute("n_donor_shells", result.n_donor_shells);
-  it.setAttribute("donor_binning", BinningTypeName(result.donor_binning.type));
-  it.setAttribute("mediator_shell_edges", result.mediator_edges);
-  it.setAttribute("n_mediator_shells", result.n_mediator_shells);
-  it.setAttribute("mediator_binning", BinningTypeName(result.mediator_binning.type));
-  it.setAttribute("receiver_shell_edges", result.receiver_edges);
-  it.setAttribute("n_receiver_shells", result.n_receiver_shells);
-  it.setAttribute("receiver_binning", BinningTypeName(result.receiver_binning.type));
 
   int my_rank = 0;
   MPI_Comm_rank(comm, &my_rank);
 
-  auto write_matrix = [&](const std::string &name,
-                          const parthenon::HostArray3D<TransferReal> &matrix) {
-    auto mesh = it.meshes[name];
-    auto comp = mesh[openPMD::MeshRecordComponent::SCALAR];
-    const auto n_q = matrix.extent(0);
-    const auto n_m = matrix.extent(1);
-    const auto n_k = matrix.extent(2);
-    // TransferResult::matrices is stored in-memory as (Q, M, K) -- dim0=
-    // donor shell, dim1=mediator shell, dim2=receiver shell (see
-    // shell_transfer.hpp) -- but the original driver's on-disk convention
-    // (and any tooling built against it) is matrix(kk, q): row=K, col=Q, for
-    // the donor/receiver axes. Transpose those two here at the I/O boundary
-    // (mediator sandwiched in between, since it has no prior on-disk
-    // convention to match) so output *files* match that established layout
-    // exactly whenever n_m==1 (mediator not decomposed), without disturbing
-    // this library's own (Q,M,K) C++ API.
-    std::vector<TransferReal> transposed(n_q * n_m * n_k);
-    for (std::size_t qi = 0; qi < n_q; qi++) {
-      for (std::size_t mi = 0; mi < n_m; mi++) {
-        for (std::size_t ki = 0; ki < n_k; ki++) {
-          transposed[(ki * n_m + mi) * n_q + qi] = matrix(qi, mi, ki);
+  if (shell_transfer != nullptr) {
+    const auto &result = *shell_transfer;
+    it.setAttribute("donor_shell_edges", result.donor_edges);
+    it.setAttribute("n_donor_shells", result.n_donor_shells);
+    it.setAttribute("donor_binning", BinningTypeName(result.donor_binning.type));
+    it.setAttribute("mediator_shell_edges", result.mediator_edges);
+    it.setAttribute("n_mediator_shells", result.n_mediator_shells);
+    it.setAttribute("mediator_binning", BinningTypeName(result.mediator_binning.type));
+    it.setAttribute("receiver_shell_edges", result.receiver_edges);
+    it.setAttribute("n_receiver_shells", result.n_receiver_shells);
+    it.setAttribute("receiver_binning", BinningTypeName(result.receiver_binning.type));
+
+    auto write_matrix = [&](const std::string &name,
+                            const parthenon::HostArray3D<TransferReal> &matrix) {
+      auto mesh = it.meshes[name];
+      auto comp = mesh[openPMD::MeshRecordComponent::SCALAR];
+      const auto n_q = matrix.extent(0);
+      const auto n_m = matrix.extent(1);
+      const auto n_k = matrix.extent(2);
+      // ShellTransferResult::matrices is stored in-memory as (Q, M, K) --
+      // dim0= donor shell, dim1=mediator shell, dim2=receiver shell (see
+      // shell_transfer.hpp) -- but the original driver's on-disk convention
+      // (and any tooling built against it) is matrix(kk, q): row=K, col=Q, for
+      // the donor/receiver axes. Transpose those two here at the I/O boundary
+      // (mediator sandwiched in between, since it has no prior on-disk
+      // convention to match) so output *files* match that established layout
+      // exactly whenever n_m==1 (mediator not decomposed), without disturbing
+      // this library's own (Q,M,K) C++ API.
+      std::vector<TransferReal> transposed(n_q * n_m * n_k);
+      for (std::size_t qi = 0; qi < n_q; qi++) {
+        for (std::size_t mi = 0; mi < n_m; mi++) {
+          for (std::size_t ki = 0; ki < n_k; ki++) {
+            transposed[(ki * n_m + mi) * n_q + qi] = matrix(qi, mi, ki);
+          }
         }
       }
+      openPMD::Extent extent = {static_cast<uint64_t>(n_k), static_cast<uint64_t>(n_m),
+                                static_cast<uint64_t>(n_q)};
+      comp.resetDataset(openPMD::Dataset(openPMD::determineDatatype<TransferReal>(), extent));
+      comp.storeChunkRaw(transposed.data(), {0, 0, 0}, extent);
+      it.seriesFlush();
+    };
+    for (const auto &[name, matrix] : result.matrices) {
+      write_matrix(name, matrix);
     }
-    openPMD::Extent extent = {static_cast<uint64_t>(n_k), static_cast<uint64_t>(n_m),
-                              static_cast<uint64_t>(n_q)};
-    comp.resetDataset(openPMD::Dataset(openPMD::determineDatatype<TransferReal>(), extent));
-    comp.storeChunkRaw(transposed.data(), {0, 0, 0}, extent);
-    it.seriesFlush();
-  };
-  for (const auto &[name, matrix] : result.matrices) {
-    write_matrix(name, matrix);
   }
 
-  auto write_vector_from_matrix = [&](const std::string &name,
-                                      const parthenon::HostArray2D<TransferReal> &matrix,
-                                      int col) {
-    auto mesh = it.meshes[name];
-    auto comp = mesh[openPMD::MeshRecordComponent::SCALAR];
-    const auto num_bins = matrix.extent(0);
-    std::vector<TransferReal> outdata(num_bins);
-    for (int i = 0; i < static_cast<int>(num_bins); i++) outdata.at(i) = matrix(i, col);
-    openPMD::Extent extent = {static_cast<uint64_t>(num_bins)};
-    // The spectrum is already MPI-reduced to rank 0, so only rank 0 writes.
-    if (my_rank == 0) {
-      comp.resetDataset(openPMD::Dataset(openPMD::determineDatatype<TransferReal>(), extent));
-      comp.storeChunkRaw(outdata.data(), {0}, extent);
+  if (spectra != nullptr) {
+    auto write_vector_from_matrix = [&](const std::string &name,
+                                        const parthenon::HostArray2D<TransferReal> &matrix,
+                                        int col) {
+      auto mesh = it.meshes[name];
+      auto comp = mesh[openPMD::MeshRecordComponent::SCALAR];
+      const auto num_bins = matrix.extent(0);
+      std::vector<TransferReal> outdata(num_bins);
+      for (int i = 0; i < static_cast<int>(num_bins); i++) outdata.at(i) = matrix(i, col);
+      openPMD::Extent extent = {static_cast<uint64_t>(num_bins)};
+      // The spectrum is already MPI-reduced to rank 0, so only rank 0 writes.
+      if (my_rank == 0) {
+        comp.resetDataset(openPMD::Dataset(openPMD::determineDatatype<TransferReal>(), extent));
+        comp.storeChunkRaw(outdata.data(), {0}, extent);
+      }
+      it.seriesFlush();
+    };
+    // "/" is a reserved path separator in ADIOS2 and is rejected outright in dataset
+    // names (not just a cosmetic/hierarchy issue) -- use "_" instead of "/" to join
+    // the spectrum name and its component.
+    for (const auto &[name, spectrum] : *spectra) {
+      write_vector_from_matrix(name + "_pow_sum", spectrum, 0);
+      write_vector_from_matrix(name + "_k_sum", spectrum, 1);
+      write_vector_from_matrix(name + "_count_sum", spectrum, 2);
     }
-    it.seriesFlush();
-  };
-  // "/" is a reserved path separator in ADIOS2 and is rejected outright in dataset
-  // names (not just a cosmetic/hierarchy issue) -- use "_" instead of "/" to join
-  // the spectrum name and its component.
-  for (const auto &[name, spectrum] : result.spectra) {
-    write_vector_from_matrix(name + "_pow_sum", spectrum, 0);
-    write_vector_from_matrix(name + "_k_sum", spectrum, 1);
-    write_vector_from_matrix(name + "_count_sum", spectrum, 2);
   }
 
   series.close();

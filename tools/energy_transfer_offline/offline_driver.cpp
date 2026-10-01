@@ -56,9 +56,9 @@ int main(int argc, char *argv[]) {
     }
     energy_transfer::ConvertConservedToPrimitive(fields);
 
-    auto result = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
-    result.spectra = energy_transfer::ComputeSpectra(pmesh, fields, spectrum_names);
-    energy_transfer::WriteResult(result, output_file, output_number);
+    auto transfer = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
+    auto spectra = energy_transfer::ComputeSpectra(pmesh, fields, spectrum_names);
+    energy_transfer::WriteResult(output_file, output_number, &transfer, &spectra);
   }
 
   pman.ParthenonFinalize();

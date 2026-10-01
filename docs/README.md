@@ -289,8 +289,9 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
   - `ComputeEnergyTransfer(Mesh*, FlatFields&, ShellTransferConfig)` --
     fields must already be ingested and in primitive form (`ingest.hpp`'s
     `GatherLiveFields`/`ReadADIOS2Fields`/`ReadPHDFFields` +
-    `convert.hpp`'s `ConvertConservedToPrimitive`). Populates only
-    `TransferResult::matrices`.
+    `convert.hpp`'s `ConvertConservedToPrimitive`). Returns a
+    `ShellTransferResult` (just `matrices` plus the binning/edges metadata
+    that produced it -- nothing about spectra, see below).
   - `ComputeFieldRequirements(cfg, spectrum_names)` -- tells you which of
     magnetic field / pressure-or-energy / acceleration the requested terms
     *and* spectra actually need, so you can build a minimal
@@ -299,11 +300,14 @@ x2max-x2min == x3max-x3min`) -- all four are checked at runtime by
 - `spectra.hpp` -- power spectra, independent of shell-to-shell transfer:
   - `ComputeSpectra(Mesh*, const FlatFields&, spectrum_names)` -- same
     ingested/primitive `FlatFields` as `ComputeEnergyTransfer` above; returns
-    a plain `map<string, HostArray2D<TransferReal>>` (a caller wanting both
-    fills it into `TransferResult::spectra` itself, e.g. before calling
-    `WriteResult`).
-- `io_openpmd.hpp` -- `WriteResult(...)` writes every computed term/spectrum
-  as a named openPMD mesh record to a `.bp` file.
+    a plain `map<string, HostArray2D<TransferReal>>` (aliased as
+    `SpectraResult` in `io_openpmd.hpp`).
+- `io_openpmd.hpp` -- `WriteResult(output_file, output_number,
+  shell_transfer_result_ptr, spectra_result_ptr)` writes whichever of its two
+  (independent, nullable) result arguments you pass into one openPMD
+  iteration -- pass `nullptr` for whichever you didn't compute this call,
+  e.g. `WriteResult("transfer", tm.ncycle, nullptr, &spectra)` for a
+  spectra-only output with no shell-transfer metadata written at all.
 
 ### Built-in terms
 
@@ -398,7 +402,7 @@ being transported, and setting `mode.mediator_resolved=true` while `terms`
 includes such a term (currently `PU` and `FU`) throws immediately, for the
 whole call, before any computation starts; see `has_decomposable_mediator`
 in `src/registry.cpp`'s `BuiltinQuantities()` for the authoritative list.
-`TransferResult::matrices` is always 3D, `(n_q, n_m, n_k)` -- the same shape
+`ShellTransferResult::matrices` is always 3D, `(n_q, n_m, n_k)` -- the same shape
 for every term, since `mode` is shared -- with `n_m == 1` whenever
 `mode.mediator_resolved == false`.
 
@@ -552,11 +556,12 @@ your own code.
      auto fields = energy_transfer::GatherLiveFields(pmesh, md.get(), spec);
      energy_transfer::ConvertConservedToPrimitive(fields);
 
-     auto result = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
+     auto transfer = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
      // Independent call -- compute spectra every cycle, energy transfer only
-     // some cycles, or vice versa, entirely up to you:
-     result.spectra = energy_transfer::ComputeSpectra(pmesh, fields, {"spec_U"});
-     energy_transfer::WriteResult(result, "transfer", tm.ncycle);
+     // some cycles, or vice versa, entirely up to you. WriteResult's two
+     // result arguments are each optional (nullptr if you only have one):
+     auto spectra = energy_transfer::ComputeSpectra(pmesh, fields, {"spec_U"});
+     energy_transfer::WriteResult("transfer", tm.ncycle, &transfer, &spectra);
    }
    ```
 
