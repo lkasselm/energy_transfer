@@ -106,6 +106,7 @@ add_library(energy_transfer
   src/registry.cpp
   src/spectra.cpp
   src/helicity.cpp
+  src/lorentz_force.cpp
   src/shell_transfer.cpp
   src/io_openpmd.cpp
 )

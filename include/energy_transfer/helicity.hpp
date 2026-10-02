@@ -11,10 +11,11 @@ using parthenon::Real;
 
 // Magnetic helicity: H(x) = A(x).B(x), where A is the Coulomb-gauge vector
 // potential reconstructed spectrally from B (A_hat = i(k x B_hat)/|k|^2,
-// A_hat(0)=0 since direction is undefined at k=0). Ported directly from
-// athenapk/src/pgen/decaying_turbulence.cpp's UserWorkBeforeOutput (same
-// formula, same DC handling), generalized to this library's usual flat
-// FlatFields-style real-space array instead of pulling straight from a
+// A_hat(0)=0 since direction is undefined at k=0; k here is the physical
+// wavenumber, mode_index * 2*pi/L, not the raw mode index). Ported directly
+// from athenapk/src/pgen/decaying_turbulence.cpp's UserWorkBeforeOutput
+// (same formula, same DC handling), generalized to this library's usual
+// flat FlatFields-style real-space array instead of pulling straight from a
 // Parthenon MeshData variable -- a caller (in-situ or offline) hands in
 // whichever 3-component B array it already has.
 

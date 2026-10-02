@@ -1,5 +1,7 @@
 #include "energy_transfer/helicity.hpp"
 
+#include <cmath>
+
 #include <kokkos_abstraction.hpp>
 #include <utils/error_checking.hpp>
 
@@ -18,6 +20,19 @@ VectorPotentialFourier ComputeVectorPotentialFourier(parthenon::Mesh *pm,
   PARTHENON_REQUIRE_THROWS(B.size() == 3 * fft_size_inbox,
                            "ComputeVectorPotentialFourier: B must be 3 * size_real_space_box().");
 
+  // Mode indices from Wavevector()/ComponentWavenumber() are raw integers,
+  // not physical wavenumbers -- scale by two_pi_over_L the same way
+  // SpectralDivergence/ShellFilterDerivative (spectral_kernels.cpp) and
+  // CalcLorentzForce (lorentz_force.cpp) do. An earlier version of this
+  // function omitted this entirely, which only happened to give the right
+  // answer on an L=2*pi box: both the k in the numerator and the |k|^2 in
+  // the denominator below are off by a factor of two_pi_over_L from the
+  // physical wavenumber, so the omission scaled the whole result by
+  // 1/two_pi_over_L -- invisible when that factor is 1, wrong otherwise.
+  const auto &mesh_size = pm->mesh_size;
+  const Real Lx = mesh_size.xmax(parthenon::X1DIR) - mesh_size.xmin(parthenon::X1DIR);
+  const Real two_pi_over_L = 2.0 * M_PI / Lx;
+
   VectorPotentialFourier vp;
   vp.FT_A = parthenon::ParArray1D<Kokkos::complex<Real>>("FT_A", 3 * fft_size_outbox);
   vp.FT_B = parthenon::ParArray1D<Kokkos::complex<Real>>("FT_B", 3 * fft_size_outbox);
@@ -35,9 +50,9 @@ VectorPotentialFourier ComputeVectorPotentialFourier(parthenon::Mesh *pm,
       "ComputeVectorPotentialFourier", fb.low[2], fb.high[2], fb.low[1], fb.high[1], fb.low[0],
       fb.high[0], KOKKOS_LAMBDA(const int k, const int j, const int i) {
         auto k_vec = kernel_helper.Wavevector(k, j, i);
-        const Real kx = Real(ComponentWavenumber(k_vec, 0));
-        const Real ky = Real(ComponentWavenumber(k_vec, 1));
-        const Real kz = Real(ComponentWavenumber(k_vec, 2));
+        const Real kx = Real(ComponentWavenumber(k_vec, 0)) * two_pi_over_L;
+        const Real ky = Real(ComponentWavenumber(k_vec, 1)) * two_pi_over_L;
+        const Real kz = Real(ComponentWavenumber(k_vec, 2)) * two_pi_over_L;
         const Real k2 = kx * kx + ky * ky + kz * kz;
         const auto idx = kernel_helper.FourierFlatIndex(k, j, i);
 
