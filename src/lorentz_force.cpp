@@ -9,15 +9,17 @@
 
 namespace energy_transfer {
 
-parthenon::ParArray1D<Real> CalcLorentzForce(parthenon::Mesh *pm,
-                                             const parthenon::ParArray1D<Real> &B) {
+std::array<parthenon::ParArray1D<Real>, 3>
+CalcLorentzForce(parthenon::Mesh *pm, const std::array<parthenon::ParArray1D<Real>, 3> &B) {
   PARTHENON_REQUIRE_THROWS(pm != nullptr, "CalcLorentzForce: mesh pointer must not be null");
 
   auto FFTMgr = pm->GetFFTManager();
   const auto fft_size_inbox = FFTMgr->size_real_space_box();
   const auto fft_size_outbox = FFTMgr->size_fourier_space_box();
-  PARTHENON_REQUIRE_THROWS(B.size() == 3 * fft_size_inbox,
-                           "CalcLorentzForce: B must be 3 * size_real_space_box().");
+  for (int c = 0; c < 3; c++) {
+    PARTHENON_REQUIRE_THROWS(B[c].size() == fft_size_inbox,
+                             "CalcLorentzForce: each component of B must be size_real_space_box().");
+  }
 
   // Mode indices from Wavevector()/ComponentWavenumber() are raw integers,
   // not physical wavenumbers -- scale by two_pi_over_L here the same way
@@ -29,9 +31,14 @@ parthenon::ParArray1D<Real> CalcLorentzForce(parthenon::Mesh *pm,
   const Real Lx = mesh_size.xmax(parthenon::X1DIR) - mesh_size.xmin(parthenon::X1DIR);
   const Real two_pi_over_L = 2.0 * M_PI / Lx;
 
+  // FFTManager::Forward/Backward already take one component at a time via a
+  // raw pointer, so B's three separate arrays need no flattening here --
+  // only the Fourier-space intermediates below stay packed, since the curl
+  // kernel computes all three output components together per mode anyway
+  // and nothing outside this function ever sees them.
   parthenon::ParArray1D<Kokkos::complex<Real>> FT_B("FT_B_lorentz", 3 * fft_size_outbox);
   for (int n = 0; n < 3; n++) {
-    FFTMgr->Forward(B.data() + n * fft_size_inbox, FT_B.data() + n * fft_size_outbox);
+    FFTMgr->Forward(B[n].data(), FT_B.data() + n * fft_size_outbox);
   }
 
   parthenon::ParArray1D<Kokkos::complex<Real>> FT_J("FT_J", 3 * fft_size_outbox);
@@ -62,24 +69,36 @@ parthenon::ParArray1D<Real> CalcLorentzForce(parthenon::Mesh *pm,
       });
   Kokkos::fence();
 
-  parthenon::ParArray1D<Real> J("J_current", 3 * fft_size_inbox);
+  std::array<parthenon::ParArray1D<Real>, 3> J;
   for (int n = 0; n < 3; n++) {
-    FFTMgr->Backward(FT_J.data() + n * fft_size_outbox, J.data() + n * fft_size_inbox);
+    J[n] = parthenon::ParArray1D<Real>("J_current", fft_size_inbox);
+    FFTMgr->Backward(FT_J.data() + n * fft_size_outbox, J[n].data());
   }
 
-  parthenon::ParArray1D<Real> F("lorentz_force", 3 * fft_size_inbox);
+  std::array<parthenon::ParArray1D<Real>, 3> F;
+  for (int c = 0; c < 3; c++) {
+    F[c] = parthenon::ParArray1D<Real>("lorentz_force", fft_size_inbox);
+  }
+  // Capture local copies of the component views rather than B/J/F
+  // themselves -- par_for's KOKKOS_LAMBDA needs to capture Kokkos Views by
+  // value for device execution, and indexing into a captured std::array
+  // of views (rather than named locals) isn't guaranteed to work the same
+  // way across backends.
+  auto Jx = J[0];
+  auto Jy = J[1];
+  auto Jz = J[2];
+  auto Bx = B[0];
+  auto By = B[1];
+  auto Bz = B[2];
+  auto Fx = F[0];
+  auto Fy = F[1];
+  auto Fz = F[2];
   parthenon::par_for(
       "ComputeLorentzForceDensity", std::size_t(0), fft_size_inbox - 1,
       KOKKOS_LAMBDA(const std::size_t idx) {
-        const Real Jx = J(0 * fft_size_inbox + idx);
-        const Real Jy = J(1 * fft_size_inbox + idx);
-        const Real Jz = J(2 * fft_size_inbox + idx);
-        const Real Bx = B(0 * fft_size_inbox + idx);
-        const Real By = B(1 * fft_size_inbox + idx);
-        const Real Bz = B(2 * fft_size_inbox + idx);
-        F(0 * fft_size_inbox + idx) = Jy * Bz - Jz * By;
-        F(1 * fft_size_inbox + idx) = Jz * Bx - Jx * Bz;
-        F(2 * fft_size_inbox + idx) = Jx * By - Jy * Bx;
+        Fx(idx) = Jy(idx) * Bz(idx) - Jz(idx) * By(idx);
+        Fy(idx) = Jz(idx) * Bx(idx) - Jx(idx) * Bz(idx);
+        Fz(idx) = Jx(idx) * By(idx) - Jy(idx) * Bx(idx);
       });
   Kokkos::fence();
 

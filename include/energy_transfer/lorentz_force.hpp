@@ -1,6 +1,8 @@
 #ifndef ENERGY_TRANSFER_LORENTZ_FORCE_HPP_
 #define ENERGY_TRANSFER_LORENTZ_FORCE_HPP_
 
+#include <array>
+
 #include <basic_types.hpp>
 #include <kokkos_types.hpp>
 #include <mesh/mesh.hpp>
@@ -20,8 +22,8 @@ using parthenon::Real;
 // 3 * size_real_space_box(); the returned array is 3 * size_real_space_box()
 // too -- a downstream caller can e.g. ScatterField it back into its own
 // mesh, the same way decaying_turbulence.cpp does for helicity today.
-parthenon::ParArray1D<Real> CalcLorentzForce(parthenon::Mesh *pm,
-                                             const parthenon::ParArray1D<Real> &B);
+std::array<parthenon::ParArray1D<Real>, 3>
+CalcLorentzForce(parthenon::Mesh *pm, const std::array<parthenon::ParArray1D<Real>, 3> &B);
 
 } // namespace energy_transfer
 
