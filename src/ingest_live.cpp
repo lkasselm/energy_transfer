@@ -1,6 +1,7 @@
 #include "energy_transfer/ingest.hpp"
 
 #include <kokkos_abstraction.hpp>
+#include <utils/error_checking.hpp>
 #include <utils/fft_manager.hpp>
 #include <utils/uniform_grid_helper.hpp>
 
@@ -117,6 +118,37 @@ FlatFields GatherLiveFields(parthenon::Mesh *pmesh, parthenon::MeshData<Real> *m
   Kokkos::fence();
 
   return fields;
+}
+
+parthenon::ParArray1D<Real> GatherLiveVector(parthenon::Mesh *pmesh,
+                                             const std::string &var_name,
+                                             const std::array<int, 3> &components) {
+  const auto fft_size_inbox = pmesh->GetFFTManager()->size_real_space_box();
+  auto helper = pmesh->GetUniformGridHelper()->GetKernelHelper();
+  auto &md = pmesh->mesh_data.Get();
+
+  auto pack = md->PackVariables(std::vector<std::string>{var_name});
+  PARTHENON_REQUIRE_THROWS(pack.GetDim(5) > 0, "GatherLiveVector: variable '" + var_name +
+                                                   "' not found in mesh data");
+
+  auto ib = md->GetBlockData(0)->GetBoundsI(parthenon::IndexDomain::interior);
+  auto jb = md->GetBlockData(0)->GetBoundsJ(parthenon::IndexDomain::interior);
+  auto kb = md->GetBlockData(0)->GetBoundsK(parthenon::IndexDomain::interior);
+  const int num_blocks = pmesh->GetNumMeshBlocksThisRank();
+
+  const auto comps = components; // local copy so the device lambda captures by value
+  parthenon::ParArray1D<Real> out("vector_flat", 3 * fft_size_inbox);
+  parthenon::par_for(
+      "GatherLiveVector", 0, num_blocks - 1, kb.s, kb.e, jb.s, jb.e, ib.s, ib.e,
+      KOKKOS_LAMBDA(const int b, const int k, const int j, const int i) {
+        const auto idx = helper.FlatIndex(b, k, j, i);
+        for (int n = 0; n < 3; n++) {
+          out(n * fft_size_inbox + idx) = pack(b, comps[n], k, j, i);
+        }
+      });
+  Kokkos::fence();
+
+  return out;
 }
 
 } // namespace energy_transfer

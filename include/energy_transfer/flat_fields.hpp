@@ -1,6 +1,7 @@
 #ifndef ENERGY_TRANSFER_FLAT_FIELDS_HPP_
 #define ENERGY_TRANSFER_FLAT_FIELDS_HPP_
 
+#include <array>
 #include <cstddef>
 
 #include <basic_types.hpp>
@@ -25,6 +26,16 @@ struct FlatFields {
   parthenon::ParArray1D<Real> pres_or_energy;  // fft_size_inbox, or empty
   parthenon::ParArray1D<Real> acc;             // 3 * fft_size_inbox, or empty
 };
+
+// Every 3-component field in this library (FlatFields above, CalcLorentzForce,
+// CalcHelicity, ...) is one packed array of size 3 * N, component-major:
+// component n of cell idx lives at n * N + idx. These convert between that
+// layout and three separate size-N arrays, e.g. for a field built outside the
+// library or one to be ScatterField'ed back into an application's mesh.
+// Live mesh data doesn't need them -- GatherLiveFields (ingest.hpp) packs
+// directly.
+parthenon::ParArray1D<Real> PackVector(const std::array<parthenon::ParArray1D<Real>, 3> &v);
+std::array<parthenon::ParArray1D<Real>, 3> UnpackVector(const parthenon::ParArray1D<Real> &packed);
 
 } // namespace energy_transfer
 

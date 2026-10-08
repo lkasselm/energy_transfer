@@ -176,6 +176,11 @@ terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU
 # helicity density field H(x)=A(x).B(x) itself -- a different quantity from
 # spec_helicity above (fluctuation scale of local helicity, not how much of
 # the total helicity sits at each k).
+#
+# spec_FL -- power spectrum of the Lorentz force density J x B (needs the
+# magnetic field; J = curl B computed spectrally). spec_FL_decomp works like
+# the other bundles: compressive = magnetic-pressure gradient, plus/minus =
+# solenoidal magnetic tension.
 spectra = spec_U,spec_rho,spec_W,spec_B
 
 gamma = 1.666667

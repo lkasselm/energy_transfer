@@ -152,6 +152,14 @@ volume average of the squared field. These are raw squared amplitudes, not energ
 the magnetic energy spectrum is `½ spec_B`, and the kinetic energy spectrum of a
 compressible flow is `½ spec_W` (density-weighted), not `½ spec_U`.
 
+**Lorentz force spectrum** (`spec_FL`, needs `B`) is the power spectrum of the
+Lorentz force density `F_L = J×B` with `J = ∇×B`, computed by
+`CalcLorentzForce` (`lorentz_force.hpp`). It is only computed when requested,
+since it costs three forward and three backward FFTs on top of the spectrum itself.
+`spec_FL_decomp` splits it the same way as the other vector fields: the compressive
+part is the magnetic-pressure gradient, and the transverse (`plus`/`minus`) parts
+are the solenoidal part of the magnetic tension.
+
 **Compressive and helical decomposition** (`spec_U_decomp`,
 `spec_W_decomp`, `spec_B_decomp`). Each Fourier mode of a vector field is
 projected onto the orthonormal complex basis `{k̂, h₊, h₋}` with

@@ -97,6 +97,7 @@ endif()
 
 add_library(energy_transfer
   src/field_spec.cpp
+  src/flat_fields.cpp
   src/spectral_kernels.cpp
   src/decomposition.cpp
   src/convert.cpp

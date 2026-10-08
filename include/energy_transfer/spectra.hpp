@@ -20,8 +20,9 @@ bool SpectrumNeedsMag(const std::string &name);
 // Computes every requested spectrum independently -- no shell-transfer
 // state, no ShellTransferConfig, no dependency on any term/quantity being
 // requested. fields must already be in primitive form. "spec_U"/"spec_rho"/
-// "spec_W"/"spec_B" are plain power spectra; "spec_U_decomp"/"spec_W_decomp"/
-// "spec_B_decomp" each expand into four entries in the returned map (the
+// "spec_W"/"spec_B"/"spec_FL" are plain power spectra (spec_FL: Lorentz force
+// density J x B, see lorentz_force.hpp); "spec_U_decomp"/"spec_W_decomp"/
+// "spec_B_decomp"/"spec_FL_decomp" each expand into four entries in the returned map (the
 // plain spectrum plus its compressive/plus/minus directional decomposition,
 // computed together in one shared Forward() FFT -- see decomposition.hpp
 // and spectral_kernels.hpp's BinFourierSpectrum).

@@ -1,11 +1,14 @@
 #include "energy_transfer/spectra.hpp"
 
+#include <algorithm>
+
 #include <kokkos_abstraction.hpp>
 #include <utils/calc_spectrum.hpp>
 #include <utils/error_checking.hpp>
 
 #include "energy_transfer/decomposition.hpp"
 #include "energy_transfer/helicity.hpp"
+#include "energy_transfer/lorentz_force.hpp"
 #include "energy_transfer/spectral_kernels.hpp"
 
 namespace energy_transfer {
@@ -27,24 +30,30 @@ bool IsHelicitySpectrumName(const std::string &name) {
 // completely field-agnostic, only caring whether it's a 1- or 3-component
 // real-space array.
 
-using FieldSelectorFn = const parthenon::ParArray1D<Real> &(*)(
-    const FlatFields &, const parthenon::ParArray1D<Real> &W_flat);
+// Fields derived from FlatFields inside ComputeSpectra rather than ingested
+// directly. FL_flat is empty unless a spec_FL* spectrum was requested.
+struct DerivedFields {
+  parthenon::ParArray1D<Real> W_flat;  // 3 * fft_size_inbox
+  parthenon::ParArray1D<Real> FL_flat; // 3 * fft_size_inbox, or empty
+};
 
-const parthenon::ParArray1D<Real> &SelectU(const FlatFields &f,
-                                           const parthenon::ParArray1D<Real> &) {
+using FieldSelectorFn = const parthenon::ParArray1D<Real> &(*)(const FlatFields &,
+                                                                const DerivedFields &);
+
+const parthenon::ParArray1D<Real> &SelectU(const FlatFields &f, const DerivedFields &) {
   return f.mom_or_vel;
 }
-const parthenon::ParArray1D<Real> &SelectRho(const FlatFields &f,
-                                             const parthenon::ParArray1D<Real> &) {
+const parthenon::ParArray1D<Real> &SelectRho(const FlatFields &f, const DerivedFields &) {
   return f.rho;
 }
-const parthenon::ParArray1D<Real> &SelectW(const FlatFields &,
-                                           const parthenon::ParArray1D<Real> &W_flat) {
-  return W_flat;
+const parthenon::ParArray1D<Real> &SelectW(const FlatFields &, const DerivedFields &d) {
+  return d.W_flat;
 }
-const parthenon::ParArray1D<Real> &SelectB(const FlatFields &f,
-                                           const parthenon::ParArray1D<Real> &) {
+const parthenon::ParArray1D<Real> &SelectB(const FlatFields &f, const DerivedFields &) {
   return f.mag;
+}
+const parthenon::ParArray1D<Real> &SelectFL(const FlatFields &, const DerivedFields &d) {
+  return d.FL_flat;
 }
 
 // One row per plain spectrum name -- "<name>_decomp" isn't a separate row;
@@ -62,6 +71,7 @@ const std::map<std::string, Spectrum> &BuiltinSpectra() {
       {"spec_rho", {&SelectRho, 1, false, false}},
       {"spec_W", {&SelectW, 3, false, true}},
       {"spec_B", {&SelectB, 3, true, true}},
+      {"spec_FL", {&SelectFL, 3, true, true}},
   };
   return table;
 }
@@ -122,6 +132,10 @@ ComputeDecomposedSpectrumBundle(parthenon::Mesh *pm, const std::string &base_nam
   };
 }
 
+bool UsesLorentzForce(const std::string &name) {
+  return name == "spec_FL" || name == "spec_FL_decomp";
+}
+
 } // namespace
 
 bool SpectrumNeedsMag(const std::string &name) {
@@ -148,6 +162,15 @@ ComputeSpectra(parthenon::Mesh *pm, const FlatFields &fields,
       });
   Kokkos::fence();
 
+  // F_L = J x B -- unlike W it costs FFTs, so only computed when requested.
+  DerivedFields derived;
+  derived.W_flat = W_flat;
+  if (std::any_of(spectrum_names.begin(), spectrum_names.end(), UsesLorentzForce)) {
+    PARTHENON_REQUIRE_THROWS(fields.mag.size() > 0,
+                             "energy_transfer: spec_FL needs the magnetic field.");
+    derived.FL_flat = CalcLorentzForce(pm, fields.mag);
+  }
+
   std::map<std::string, parthenon::HostArray2D<TransferReal>> result;
   for (auto &name : spectrum_names) {
     if (name == "spec_helicity") {
@@ -168,7 +191,7 @@ ComputeSpectra(parthenon::Mesh *pm, const FlatFields &fields,
     }
 
     const auto &spec = LookupSpectrum(name);
-    const auto &field = spec.select(fields, W_flat);
+    const auto &field = spec.select(fields, derived);
     if (!HasDecompSuffix(name)) {
       result.emplace(name, parthenon::utils::fft::CalcSpectrum(pm, field, spec.n_comp)
                                .GetHostMirrorAndCopy());

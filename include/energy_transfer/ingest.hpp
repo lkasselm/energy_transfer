@@ -39,6 +39,15 @@ struct FileFieldNaming {
 FlatFields GatherLiveFields(parthenon::Mesh *pmesh, parthenon::MeshData<Real> *md,
                             const LiveFieldSpec &spec);
 
+// Gathers just one 3-component vector (components[n] of var_name) from the
+// mesh's full (all local blocks) MeshData into the packed
+// 3 * size_real_space_box() layout (see flat_fields.hpp) -- for when a caller
+// only needs e.g. B for CalcLorentzForce/CalcHelicity, without
+// GatherLiveFields' rho/velocity copies.
+parthenon::ParArray1D<Real> GatherLiveVector(parthenon::Mesh *pmesh,
+                                             const std::string &var_name,
+                                             const std::array<int, 3> &components);
+
 // Reads fields directly from an ADIOS2/bp5 snapshot file into the shared
 // flat-array representation, selecting each rank's local box via the mesh's
 // UniformGridHelper.
