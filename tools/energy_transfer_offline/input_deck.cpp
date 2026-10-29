@@ -242,7 +242,7 @@ energy_transfer::ShellTransferConfig ParseShellTransferConfig(parthenon::Paramet
                                      "receiver_shell_edges")
           : default_binning;
 
-  const auto terms_str = pin->GetOrAddString("energy_transfer", "terms", "UUA,UUC");
+  const auto terms_str = pin->GetOrAddString("energy_transfer", "terms", "");
   cfg.terms = SplitCommaList(terms_str);
 
   const auto mode_str = pin->GetOrAddString("energy_transfer", "mode", "donor,receiver");
@@ -252,7 +252,7 @@ energy_transfer::ShellTransferConfig ParseShellTransferConfig(parthenon::Paramet
 }
 
 std::vector<std::string> ParseSpectrumNames(parthenon::ParameterInput *pin) {
-  const auto spectra_str = pin->GetOrAddString("energy_transfer", "spectra", "spec_U");
+  const auto spectra_str = pin->GetOrAddString("energy_transfer", "spectra", "");
   return SplitCommaList(spectra_str);
 }
 

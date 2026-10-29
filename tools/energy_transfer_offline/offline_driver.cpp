@@ -1,3 +1,5 @@
+#include <optional>
+
 #include <parthenon_manager.hpp>
 #include <utils/error_checking.hpp>
 
@@ -41,6 +43,9 @@ int main(int argc, char *argv[]) {
 
     auto cfg = ParseShellTransferConfig(pin);
     auto spectrum_names = ParseSpectrumNames(pin);
+    PARTHENON_REQUIRE_THROWS(!cfg.terms.empty() || !spectrum_names.empty(),
+                             "energy-transfer-offline: nothing to compute -- set "
+                             "<energy_transfer>/terms and/or <energy_transfer>/spectra.");
     const auto req = energy_transfer::ComputeFieldRequirements(cfg, spectrum_names);
     const auto naming =
         ParseFileFieldNaming(pin, input_file, req.mag, req.pres_or_energy, req.acc);
@@ -56,9 +61,15 @@ int main(int argc, char *argv[]) {
     }
     energy_transfer::ConvertConservedToPrimitive(fields);
 
-    auto transfer = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
-    auto spectra = energy_transfer::ComputeSpectra(pmesh, fields, spectrum_names);
-    energy_transfer::WriteResult(output_file, output_number, &transfer, &spectra);
+    // terms= and spectra= both default to empty; skip whichever part wasn't
+    // requested so WriteResult leaves it out of the output entirely.
+    std::optional<energy_transfer::ShellTransferResult> transfer;
+    if (!cfg.terms.empty()) transfer = energy_transfer::ComputeEnergyTransfer(pmesh, fields, cfg);
+    std::optional<energy_transfer::SpectraResult> spectra;
+    if (!spectrum_names.empty())
+      spectra = energy_transfer::ComputeSpectra(pmesh, fields, spectrum_names);
+    energy_transfer::WriteResult(output_file, output_number, transfer ? &*transfer : nullptr,
+                                 spectra ? &*spectra : nullptr);
   }
 
   pman.ParthenonFinalize();

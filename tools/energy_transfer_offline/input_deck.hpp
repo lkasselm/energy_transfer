@@ -18,11 +18,11 @@
 // to the one executable that actually needs it, rather than in the library.
 
 // Reads binning=/num_shells=/shell_edges=, donor_binning=/mediator_binning=/
-// receiver_binning= (each with its own _num_shells=/_shell_edges=), terms=,
-// and mode= -- see docs/README.md for the full key reference.
+// receiver_binning= (each with its own _num_shells=/_shell_edges=), terms=
+// (default: none), and mode= -- see docs/README.md for the full key reference.
 energy_transfer::ShellTransferConfig ParseShellTransferConfig(parthenon::ParameterInput *pin);
 
-// Reads energy_transfer/spectra= (comma-separated names, default "spec_U").
+// Reads energy_transfer/spectra= (comma-separated names, default: none).
 std::vector<std::string> ParseSpectrumNames(parthenon::ParameterInput *pin);
 
 // Picks the ADIOS2 or Parthenon HDF5 naming convention based on input_file's

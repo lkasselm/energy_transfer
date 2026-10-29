@@ -415,7 +415,9 @@ for every term, since `mode` is shared -- with `n_m == 1` whenever
 `mode.mediator_resolved == false`.
 
 Input-file keys: `terms=` is a plain comma-separated name list (no per-term
-suffix), e.g. `terms=UUA,BBA,BUT`; `mode=` lists which axes are decomposed --
+suffix), e.g. `terms=UUA,BBA,BUT`. In the offline driver both `terms=` and
+`spectra=` default to none: leaving one out skips that part entirely (it is
+neither computed nor written), and leaving out both is an error. `mode=` lists which axes are decomposed --
 any comma-separated subset of `donor`, `mediator`, `receiver`, in any order.
 `mode = donor,receiver` is the default; `mode = donor,mediator,receiver`
 decomposes all three; an empty `mode =` decomposes none, giving one global

@@ -14,6 +14,7 @@
 #include "energy_transfer/shell_transfer.hpp" // ComputeEnergyTransfer
 #include "energy_transfer/spectra.hpp"        // ComputeSpectra
 #include "energy_transfer/helicity.hpp"       // CalcHelicity
+#include "energy_transfer/helmholtz.hpp"      // ComputeHelmholtzFourier, CalcHelmholtzPotentials
 #include "energy_transfer/lorentz_force.hpp"  // CalcLorentzForce
 #include "energy_transfer/io_openpmd.hpp"     // WriteResult
 

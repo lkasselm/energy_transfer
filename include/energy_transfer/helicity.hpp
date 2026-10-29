@@ -19,7 +19,8 @@ using parthenon::Real;
 // Parthenon MeshData variable -- a caller (in-situ or offline) hands in
 // whichever 3-component B array it already has.
 
-// The Coulomb-gauge vector potential of a real 3-component field B, kept in
+// The Coulomb-gauge vector potential of a real 3-component field B (the
+// solenoidal potential of helmholtz.hpp's decomposition), kept in
 // Fourier space -- the shared spectral step behind both CalcHelicity below
 // and a magnetic helicity *spectrum* (a co-spectrum of A_hat and B_hat, see
 // spectral_kernels.hpp's BinFourierCospectrum), which needs A_hat and B_hat

@@ -133,6 +133,8 @@ shell_edges = 0.5,1.5,2.5,16.0,26.5,28.5,32.0
 #   compute_UBPbb=true -> UBPbb
 #   compute_PU=true    -> PU
 #   compute_FU=false   -> (omitted)
+# Defaults to none if omitted (no shell transfers computed or written); at
+# least one of terms= and spectra= must be set.
 terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU
 
 # Which shell axes are decomposed, shared by every term listed above (not
@@ -181,6 +183,8 @@ terms = UUA,UUC,BBA,BBC,BUT,UBTb,UBTbA,UBTbC,BUPbb,UBPbb,PU
 # magnetic field; J = curl B computed spectrally). spec_FL_decomp works like
 # the other bundles: compressive = magnetic-pressure gradient, plus/minus =
 # solenoidal magnetic tension.
+#
+# Defaults to none if omitted (no spectra computed or written).
 spectra = spec_U,spec_rho,spec_W,spec_B
 
 gamma = 1.666667

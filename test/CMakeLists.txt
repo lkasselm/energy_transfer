@@ -23,4 +23,10 @@ add_executable(test_helicity_smoke test_helicity_smoke.cpp)
 target_link_libraries(test_helicity_smoke PRIVATE energy_transfer Parthenon::parthenon MPI::MPI_CXX)
 add_test(NAME helicity_smoke COMMAND test_helicity_smoke -i ${CMAKE_CURRENT_SOURCE_DIR}/synthetic.in)
 
+add_executable(test_helmholtz test_helmholtz.cpp)
+target_link_libraries(test_helmholtz PRIVATE energy_transfer Parthenon::parthenon MPI::MPI_CXX)
+# L = 1 box (not synthetic.in's 2*pi), so the 2*pi/L wavenumber scaling is exercised.
+add_test(NAME helmholtz COMMAND test_helmholtz -i ${CMAKE_CURRENT_SOURCE_DIR}/synthetic.in
+         parthenon/mesh/x1max=1.0 parthenon/mesh/x2max=1.0 parthenon/mesh/x3max=1.0)
+
 add_subdirectory(regression)
